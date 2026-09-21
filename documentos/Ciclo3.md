@@ -460,6 +460,31 @@ flowchart LR
     CTR -- "12: insertar" --> CE_C
 ```
 
+**Detalle de comunicación CU32**
+
+El flujo de comunicación de CU32 queda separado en responsabilidades de análisis para que el
+caso de uso sea trazable desde la interfaz hasta la persistencia:
+
+| Objeto | Tipo | Responsabilidad en CU32 |
+| :-- | :-- | :-- |
+| `IU_Vestidor` | Boundary | Recibe foto, prenda, medidas, modo de prueba y acciones finales del cliente. |
+| `CTR_Analitica` | Control | Coordina endpoints `/analytics/tryon/*`, valida sesión, prenda, variante y payloads. |
+| `VirtualTryonAIService` | Control/Servicio | Ejecuta segmentación, rigging, recomendación de talla y motor VTON en cascada. |
+| `CE_Prenda` | Entity | Entrega datos del producto, variante, imagen frontal, categoría y tallas disponibles. |
+| `CE_SesionVestidor` | Entity | Registra canal `WEB/MOBILE`, token de sesión y estado de la prueba virtual. |
+| `CE_PrendaProbada` | Entity | Guarda cada prenda/variante probada con talla sugerida y feedback de calce. |
+| `CE_CapturaVestidor` | Entity | Persiste la captura generada, modelo usado, confianza y medidas asociadas. |
+
+Mensajes principales:
+
+1. `crearSesion(channel)` inicia la trazabilidad formal del vestidor.
+2. `obtenerRigPrenda(product_id, image_url)` mide la prenda una sola vez para el modo RA en vivo.
+3. `removeBackground(photo)` normaliza la foto del cliente para la prueba fotorrealista.
+4. `simulate(measurements, product_id)` calcula talla recomendada y ajuste.
+5. `generateVton(photo, garment, model_choice)` selecciona FASHN.ai, IDM-VTON o motor local.
+6. `registrarItemProbado(session_token, product_id, variant_id, tested_size)` audita la prenda.
+7. `guardarCaptura(session_token, result_url, confidence)` deja evidencia reutilizable para compra o reserva.
+
 **CU34 — Búsqueda por voz**
 
 ```mermaid
@@ -615,6 +640,69 @@ sequenceDiagram
     end
     API-->>IU: 7: imagen resultado + modelo usado
     C->>IU: 8: Añadir al carrito / Reservar en tienda
+```
+
+**DSC032.1 — Vestidor virtual completo con sesión, rig, captura y salida comercial**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant UI as IU_Vestidor Web/Movil
+    participant ENG as LiveGarmentEngine
+    participant API as FastAPI /analytics/tryon
+    participant SVC as VirtualTryonAIService
+    participant EXT as FASHN.ai / HuggingFace
+    participant DB as PostgreSQL
+    participant SALES as Carrito / Reservas
+
+    C->>UI: Abrir vestidor desde catalogo o menu
+    UI->>API: POST /sessions {channel}
+    API->>DB: INSERT virtual_tryon_sessions
+    DB-->>API: session_token
+    API-->>UI: token de sesion
+
+    C->>UI: Seleccionar prenda y variante
+    UI->>API: GET /garment-rig/{product_id}
+    API->>SVC: build_garment_rig(product_image)
+    SVC-->>API: rig geometrico + silueta recortada
+    API-->>UI: rig para render local
+
+    alt Espejo RA en vivo
+        C->>UI: Autorizar camara
+        UI->>ENG: iniciar pose landmarker + filtro One Euro
+        loop cada frame
+            ENG->>ENG: detectar landmarks, escalar prenda y ocluir brazos
+            ENG-->>UI: canvas con prenda ajustada
+        end
+    else Captura fotorrealista
+        C->>UI: Subir foto y solicitar generar look
+        UI->>API: POST /generate-vton {session_token, photo, garment}
+        API->>SVC: generate_tryon()
+        alt FASHN_API_KEY disponible
+            SVC->>EXT: tryon cloud
+        else HUGGINGFACE_API_TOKEN disponible
+            SVC->>EXT: IDM-VTON
+        else fallback local
+            SVC->>SVC: rembg + MediaPipe + amoldado anatomico
+        end
+        SVC-->>API: imagen resultado + confidence + model
+        API->>DB: INSERT virtual_tryon_captures
+        API-->>UI: resultado fotorrealista
+    end
+
+    C->>UI: Ingresar medidas corporales
+    UI->>API: POST /simulate {height, weight, chest, waist, hips}
+    API->>SVC: calcular talla y fit
+    SVC-->>API: recommended_size + fit_feedback
+    API->>DB: INSERT virtual_tryon_items
+    API-->>UI: talla recomendada y feedback
+
+    alt Comprar ahora
+        UI->>SALES: agregar al carrito con talla recomendada (CU17)
+    else Reservar prueba fisica
+        UI->>SALES: crear reserva con prenda/talla sugerida (CU26)
+    end
 ```
 
 **DSC034 — Búsqueda por voz (móvil)**
