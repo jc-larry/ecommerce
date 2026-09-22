@@ -315,12 +315,31 @@
             </div>
 
             <!-- CAPA BASE 3: CÁMARA WEB EN VIVO -->
+            <!-- Vídeo y prenda comparten el volteo de espejo: si sólo se volteara uno,
+                 la prenda aparecería en el lado contrario del cuerpo. -->
             <video *ngIf="imageSource === 'camera'"
                    #videoPlayer
                    autoplay
                    playsinline
+                   muted
                    class="w-100 h-100 position-absolute top-0 start-0"
+                   [class.mirror-flip]="mirrorView"
                    style="object-fit: contain;"></video>
+
+            <canvas *ngIf="imageSource === 'camera'"
+                    #garmentOverlay
+                    [class.mirror-flip]="mirrorView"
+                    class="pose-garment-canvas position-absolute top-0 start-0 w-100 h-100 pointer-events-none"></canvas>
+
+            <!-- Aviso mientras el backend mide la prenda (sólo la primera vez por prenda) -->
+            <div *ngIf="imageSource === 'camera' && rigStatus === 'loading'"
+                 class="position-absolute top-50 start-50 translate-middle badge bg-dark bg-opacity-75 py-2 px-3">
+              <span class="spinner-border spinner-border-sm me-2"></span>Preparando la prenda…
+            </div>
+            <div *ngIf="imageSource === 'camera' && rigStatus === 'failed'"
+                 class="position-absolute top-50 start-50 translate-middle badge bg-danger bg-opacity-75 py-2 px-3">
+              No se pudo medir esta prenda para el probador en vivo.
+            </div>
 
             <!-- CAPA BASE 4: MANIQUÍ VECTORIAL ANATÓMICO -->
             <div *ngIf="imageSource === 'mannequin'" class="mannequin-base-layer w-100 h-100 d-flex align-items-center justify-content-center">
@@ -333,9 +352,9 @@
             </div>
 
             <!-- CAPA DE LA PRENDA COLOCADA AUTOMÁTICAMENTE SOBRE EL CUERPO (ANATÓMICA POR CATEGORÍA) -->
-            <div *ngIf="selectedProduct && (imageSource === 'mannequin' || imageSource === 'camera' || imageSource === 'upload')" 
+            <div *ngIf="selectedProduct && imageSource === 'mannequin'" 
                  class="ar-garment-layer position-absolute pointer-events-none d-flex align-items-center justify-content-center"
-                 [style.transform]="'translate(' + (overlayOffsetX + (imageSource === 'camera' ? trackedOffsetX : 0)) + 'px, ' + (overlayOffsetY + (imageSource === 'camera' ? trackedOffsetY : 0)) + 'px) scale(' + (fitScaleFactor * overlayScale * (imageSource === 'camera' ? trackedScale : 1)) + ')'"
+                 [style.transform]="'translate(' + overlayOffsetX + 'px, ' + overlayOffsetY + 'px) scale(' + (fitScaleFactor * overlayScale) + ')'"
                  [style.opacity]="overlayOpacity"
                  [style.mix-blend-mode]="blendMode"
                  [style.top]="isDressOrOnePiece ? '18%' : (isBottom ? '48%' : '18%')"

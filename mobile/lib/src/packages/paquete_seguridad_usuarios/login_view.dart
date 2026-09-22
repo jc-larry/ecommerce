@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'auth_service.dart';
 import 'register_view.dart';
 import 'recover_view.dart';
-import '../paquete_paquete_catalogo_y_tiendas/store_shell.dart';
-import '../paquete_paquete_envios_y_logistica/delivery_dashboard_view.dart';
+import '../paquete_catalogo_y_tiendas/store_shell.dart';
+import '../paquete_envios_y_logistica/delivery_dashboard_view.dart';
 
 class LoginView extends StatefulWidget {
   const LoginView({super.key});

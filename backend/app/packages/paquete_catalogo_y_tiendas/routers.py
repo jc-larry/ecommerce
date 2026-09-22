@@ -58,7 +58,7 @@ def get_optional_user(
 
 
 def _attach_ratings(db: Session, products: List[Product]) -> None:
-    """Rellena rating_avg / rating_count / discount_percent en cada Product (para ProductResponse)."""
+    """Rellena rating_avg / rating_count / discount_percent / metadatos de temporada en cada Product (para ProductResponse)."""
     ids = [p.id for p in products]
     ratings: dict[int, tuple] = {}
     if ids:
@@ -73,13 +73,54 @@ def _attach_ratings(db: Session, products: List[Product]) -> None:
             .all()
         )
         ratings = {pid: (float(avg or 0), int(cnt or 0)) for pid, avg, cnt in rows}
+
+    # [CU13] Consultar campañas de temporada activas vigentes hoy
+    today = date.today()
+    active_promos = (
+        db.query(SeasonalPromotion)
+        .filter(
+            SeasonalPromotion.is_active == True,
+            SeasonalPromotion.start_date <= today,
+            SeasonalPromotion.end_date >= today,
+        )
+        .all()
+    )
+
     for p in products:
         avg, cnt = ratings.get(p.id, (0.0, 0))
         p.rating_avg = round(avg, 1)
         p.rating_count = cnt
         base = float(p.base_price or 0)
         cmp_price = float(p.compare_at_price) if p.compare_at_price else 0.0
-        p.discount_percent = round((1 - base / cmp_price) * 100) if cmp_price > base > 0 else 0
+
+        # Evaluar si la prenda califica para una promoción de temporada activa
+        matched_promo = None
+        for promo in active_promos:
+            if promo.season_id and p.season_id == promo.season_id:
+                if matched_promo is None or promo.discount_percent > matched_promo.discount_percent:
+                    matched_promo = promo
+            elif promo.category_id and p.category_id == promo.category_id and not promo.season_id:
+                if matched_promo is None or promo.discount_percent > matched_promo.discount_percent:
+                    matched_promo = promo
+
+        if matched_promo:
+            p.seasonal_discount_percent = matched_promo.discount_percent
+            p.seasonal_promotion_name = matched_promo.name
+            promo_discount_amount = round(base * (matched_promo.discount_percent / 100.0), 2)
+            p.effective_price = max(0.0, round(base - promo_discount_amount, 2))
+            if cmp_price > base > 0:
+                direct_discount = round((1 - base / cmp_price) * 100)
+                p.discount_percent = max(direct_discount, matched_promo.discount_percent)
+            else:
+                p.discount_percent = matched_promo.discount_percent
+                if not p.compare_at_price:
+                    p.compare_at_price = p.base_price
+                    p.base_price = p.effective_price
+        else:
+            p.seasonal_discount_percent = 0
+            p.seasonal_promotion_name = None
+            p.effective_price = base
+            p.discount_percent = round((1 - base / cmp_price) * 100) if cmp_price > base > 0 else 0
 
 @router.post("/upload-image")
 def upload_image(
@@ -266,6 +307,7 @@ def list_products(db: Session = Depends(get_db)):
         )
         .all()
     )
+    _attach_ratings(db, prods)
     return prods
 
 # --- Búsqueda y Disponibilidad por Sucursal (CU12) ---
@@ -321,6 +363,8 @@ def search_products(
     db: Session = Depends(get_db),
 ):
     """[CU12] Búsqueda y filtrado facetado de catálogo con disponibilidad por sucursal."""
+    # [CU12 - Paso 2] / [DSC012 - Paso 2] +buscar_y_filtrar_catalogo(criterios)
+    # [CU12 - Paso 3] / [DSC012 - Paso 3] +select_products_with_facets()
     query = (
         db.query(Product)
         .options(
@@ -369,6 +413,7 @@ def search_products(
     all_matching = query.all()
     _attach_ratings(db, all_matching)
 
+    # [CU12 - Paso 4] / [DSC012 - Paso 4] +verificar_stock_sucursales(sucursal_id)
     # Calcular stock por sucursal y stock global para cada producto
     variant_ids = [v.id for p in all_matching for v in p.variants]
     stock_map: dict[tuple[int, int], int] = {}
@@ -423,6 +468,7 @@ def search_products(
     start = (page - 1) * page_size
     paged_items = processed_items[start : start + page_size]
 
+    # [CU12 - Paso 5] / [DSC012 - Paso 5] +Retornar catálogo facetado
     return ProductSearchResponse(
         items=paged_items,
         total=total,
@@ -435,6 +481,8 @@ def search_products(
 @router.get("/products/{product_id}/branch-availability", response_model=ProductAvailabilityResponse)
 def get_product_branch_availability(product_id: int, db: Session = Depends(get_db)):
     """[CU12] Desglose de disponibilidad y stock de cada variante por sucursal física."""
+    # [CU12 - Paso 6] / [DSC012 - Paso 6] +get_availability_by_branch(product_id)
+    # [CU12 - Paso 7] / [DSC012 - Paso 7] +select_branches_inventory(product_id)
     prod = (
         db.query(Product)
         .options(
@@ -490,6 +538,7 @@ def get_product_branch_availability(product_id: int, db: Session = Depends(get_d
             )
         )
 
+    # [CU12 - Paso 8] / [DSC012 - Paso 8] +Retornar desglose por sucursales
     return ProductAvailabilityResponse(
         product_id=prod.id,
         product_name=prod.name,
@@ -733,6 +782,8 @@ def submit_review(
     current_user: User = Depends(get_current_user),
 ):
     """[CU14] Crea o actualiza la reseña del cliente para esta prenda (una por prenda por cliente)"""
+    # [CU14 - Paso 2] / [DSC014 - Paso 2] +submit_review(product_id, rating, comment)
+    # [CU14 - Paso 3] / [DSC014 - Paso 3] +check_product_exists(product_id)
     prod = db.query(Product).filter(Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -743,6 +794,7 @@ def submit_review(
         .first()
     )
     action = "UPDATE" if review else "INSERT"
+    # [CU14 - Paso 4] / [DSC014 - Paso 4] +insert_or_update(review, status='APPROVED')
     if review:
         review.rating = data.rating
         review.comment = data.comment
@@ -757,6 +809,7 @@ def submit_review(
     db.commit()
     db.refresh(review)
 
+    # [CU14 - Paso 5] / [DSC014 - Paso 5] +log_event(review) y confirmación
     log_event(db, current_user.id, action, "product_reviews", review.id,
               {"product_id": product_id, "rating": data.rating}, request.client.host)
     return ReviewResponse(
@@ -874,14 +927,18 @@ def add_to_wishlist(
     current_user: User = Depends(get_current_user),
 ):
     """[CU14] Marca una prenda como favorita (idempotente)"""
+    # [CU14 - Paso 6] / [DSC014 - Paso 6] +add_to_wishlist(product_id)
+    # [CU14 - Paso 7] / [DSC014 - Paso 7] +check_product_exists(product_id)
     if not db.query(Product.id).filter(Product.id == product_id).first():
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
     exists = db.query(WishlistItem).filter(
         WishlistItem.user_id == current_user.id, WishlistItem.product_id == product_id
     ).first()
+    # [CU14 - Paso 8] / [DSC014 - Paso 8] +insert(wishlist_item)
     if not exists:
         db.add(WishlistItem(user_id=current_user.id, product_id=product_id))
         db.commit()
+        # [CU14 - Paso 9] / [DSC014 - Paso 9] +log_event(wishlist) y confirmación
         log_event(db, current_user.id, "INSERT", "wishlist_items", product_id,
                   {"product_id": product_id}, request.client.host)
     return WishlistToggleResponse(product_id=product_id, in_wishlist=True)
@@ -1182,7 +1239,9 @@ def create_coupon(
     current_user: User = Depends(admin_check),
 ):
     """[CU13] Crea un nuevo cupón de descuento."""
+    # [CU13 - Paso 2] / [DSC013 - Paso 2] +create_coupon(code, discount_type, discount_value, valid_until)
     normalized_code = data.code.strip().upper()
+    # [CU13 - Paso 3] / [DSC013 - Paso 3] +check_coupon_code_unique(code)
     existing = db.query(Coupon).filter(Coupon.code == normalized_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="El código de cupón ya existe.")
@@ -1190,6 +1249,7 @@ def create_coupon(
     if data.valid_until <= data.valid_from:
         raise HTTPException(status_code=400, detail="La fecha de expiración debe ser posterior a la fecha de inicio.")
 
+    # [CU13 - Paso 4] / [DSC013 - Paso 4] +insert(coupon, status='ACTIVE')
     coupon = Coupon(
         code=normalized_code,
         discount_type=data.discount_type,
@@ -1204,6 +1264,7 @@ def create_coupon(
     db.add(coupon)
     db.commit()
     db.refresh(coupon)
+    # [CU13 - Paso 5] / [DSC013 - Paso 5] +log_event(coupon) y confirmación
     log_event(db, current_user.id, "INSERT", "coupons", coupon.id, {"code": coupon.code}, request.client.host)
     return coupon
 
@@ -1275,7 +1336,9 @@ def validate_coupon(
     db: Session = Depends(get_db),
 ):
     """[CU13] Valida un código de cupón contra el monto del pedido (para carrito / checkout)."""
+    # [CU13 - Paso 6] / [DSC013 - Paso 6] +validate_coupon(code, subtotal)
     normalized_code = data.code.strip().upper()
+    # [CU13 - Paso 7] / [DSC013 - Paso 7] +select_coupon_where(code)
     coupon = db.query(Coupon).filter(Coupon.code == normalized_code).first()
 
     if not coupon:
@@ -1285,6 +1348,7 @@ def validate_coupon(
             message="El código de cupón no existe.",
         )
 
+    # [CU13 - Paso 8] / [DSC013 - Paso 8] +check_validity_dates_and_uses(coupon)
     if not coupon.is_active:
         return CouponValidateResponse(
             valid=False,
@@ -1350,7 +1414,10 @@ def list_promotions(db: Session = Depends(get_db)):
     """[CU13] Lista todas las ofertas de temporada."""
     return (
         db.query(SeasonalPromotion)
-        .options(selectinload(SeasonalPromotion.category))
+        .options(
+            selectinload(SeasonalPromotion.category),
+            selectinload(SeasonalPromotion.season),
+        )
         .order_by(SeasonalPromotion.created_at.desc())
         .all()
     )
@@ -1372,6 +1439,7 @@ def create_promotion(
         description=data.description,
         discount_percent=data.discount_percent,
         category_id=data.category_id,
+        season_id=data.season_id,
         start_date=data.start_date,
         end_date=data.end_date,
         is_active=data.is_active,
@@ -1404,6 +1472,8 @@ def update_promotion(
         promo.discount_percent = data.discount_percent
     if data.category_id is not None:
         promo.category_id = data.category_id
+    if data.season_id is not None:
+        promo.season_id = data.season_id
     if data.start_date is not None:
         promo.start_date = data.start_date
     if data.end_date is not None:

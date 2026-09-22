@@ -8,6 +8,8 @@ from app.packages.paquete_seguridad_usuarios.routers import get_current_user
 from app.packages.paquete_ventas_y_pagos.schemas import (
     PayPalOrderCreateRequest,
     PayPalOrderCaptureRequest,
+    PayPalSimulatorLoginRequest,
+    PayPalSimulatorApproveRequest,
 )
 from app.packages.paquete_ventas_y_pagos.paypal_service import paypal_service
 
@@ -55,8 +57,43 @@ async def create_paypal_order(
         reference_id=ref_id,
         description=payload.description or "Pago FashionStore",
         customer_email=current_user.email,
+        force_simulation=bool(payload.force_simulation),
     )
     return order_data
+
+
+@router.post("/simulator/login")
+def simulator_login(
+    payload: PayPalSimulatorLoginRequest,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """[Simulador] Inicio de sesión en la ventana de PayPal simulada.
+
+    Devuelve el perfil del comprador (nombre, correo, fuentes de pago) para la pantalla de
+    revisión. 401 si el correo o la contraseña no coinciden con la cuenta del simulador.
+    """
+    payer = paypal_service.simulator_login(payload.email, payload.password)
+    return {
+        "payer": payer,
+        # Fuentes de pago ficticias que muestra la pantalla de revisión, como en PayPal.
+        "funding_sources": [
+            {"id": "BALANCE", "label": "Saldo de PayPal", "detail": "USD"},
+            {"id": "CARD", "label": "Visa", "detail": "•••• 4242"},
+        ],
+    }
+
+
+@router.post("/simulator/approve")
+def simulator_approve(
+    payload: PayPalSimulatorApproveRequest,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """[Simulador] El comprador confirma el pago de una orden simulada.
+
+    Equivale a pulsar "Pagar" en PayPal: deja la orden APPROVED para que `/capture-order`
+    la cobre. Sin esta aprobación la captura se rechaza.
+    """
+    return paypal_service.simulator_approve(payload.paypal_order_id, payload.email, payload.password)
 
 
 @router.post("/capture-order")
@@ -71,7 +108,7 @@ async def capture_paypal_order(
             detail="Se requiere el ID de la orden de PayPal.",
         )
 
-    capture_data = await paypal_service.capture_order(payload.paypal_order_id)
+    capture_data = await paypal_service.capture_order(payload.paypal_order_id, payload.approval_token)
     if capture_data.get("status") not in ("COMPLETED", "APPROVED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

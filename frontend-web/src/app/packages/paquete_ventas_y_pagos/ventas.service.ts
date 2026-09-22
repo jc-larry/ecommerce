@@ -215,17 +215,20 @@ export class VentasService {
     return this.http.get<any>(`${this.paypalUrl}/config`);
   }
 
-  createPayPalOrder(amountBob: number, description: string = 'Pago FashionStore', referenceId?: string): Observable<any> {
+  createPayPalOrder(amountBob: number, description: string = 'Pago FashionStore', referenceId?: string, forceSimulation: boolean = false): Observable<any> {
     return this.http.post<any>(`${this.paypalUrl}/create-order`, {
       amount_bob: amountBob,
       description,
-      reference_id: referenceId
+      reference_id: referenceId,
+      force_simulation: forceSimulation
     });
   }
 
-  capturePayPalOrder(paypalOrderId: string): Observable<any> {
+  /** Captura una orden aprobada. `approvalToken` solo aplica al simulador de PayPal. */
+  capturePayPalOrder(paypalOrderId: string, approvalToken?: string): Observable<any> {
     return this.http.post<any>(`${this.paypalUrl}/capture-order`, {
-      paypal_order_id: paypalOrderId
+      paypal_order_id: paypalOrderId,
+      approval_token: approvalToken
     });
   }
 

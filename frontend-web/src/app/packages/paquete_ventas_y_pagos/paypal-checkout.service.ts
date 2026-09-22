@@ -28,6 +28,36 @@ export interface PayPalCaptureResult {
   };
 }
 
+/** Perfil del comprador que devuelve el login del simulador. */
+export interface PayPalSimPayer {
+  payer_id: string;
+  email_address: string;
+  name: { given_name: string; surname: string };
+}
+
+/** Respuesta de POST /payments/paypal/simulator/login. */
+export interface PayPalSimLoginResult {
+  payer: PayPalSimPayer;
+  funding_sources: { id: string; label: string; detail: string }[];
+}
+
+/** Respuesta de POST /payments/paypal/simulator/approve. */
+export interface PayPalSimApproval {
+  id: string;
+  status: string;
+  approval_token: string;
+}
+
+/** Respuesta de POST /payments/paypal/create-order. */
+export interface PayPalOrderResult {
+  id: string;
+  status: string;
+  amount_bob: number;
+  amount_usd: number;
+  exchange_rate: number;
+  simulated: boolean;
+}
+
 export interface PayPalButtonsOptions {
   amountBob: number;
   description: string;
@@ -63,6 +93,7 @@ const SDK_SCRIPT_ID = 'paypal-js-sdk';
 @Injectable({ providedIn: 'root' })
 export class PayPalCheckoutService {
   private readonly configUrl = `${environment.apiUrl}/payments/paypal/config`;
+  private readonly simulatorUrl = `${environment.apiUrl}/payments/paypal/simulator`;
   private config$?: Observable<PayPalConfig>;
   private sdkPromise?: Promise<PayPalNamespace>;
 
@@ -78,6 +109,30 @@ export class PayPalCheckoutService {
       this.config$ = this.http.get<PayPalConfig>(this.configUrl).pipe(shareReplay(1));
     }
     return this.config$;
+  }
+
+  /** [Simulador] Crea una orden simulada (no contacta a PayPal). */
+  createSimulatedOrder(amountBob: number, description: string): Observable<PayPalOrderResult> {
+    return this.ventasService.createPayPalOrder(amountBob, description, undefined, true) as Observable<PayPalOrderResult>;
+  }
+
+  /** [Simulador] Inicio de sesión del comprador con la cuenta del simulador. */
+  simulatorLogin(email: string, password: string): Observable<PayPalSimLoginResult> {
+    return this.http.post<PayPalSimLoginResult>(`${this.simulatorUrl}/login`, { email, password });
+  }
+
+  /** [Simulador] El comprador aprueba la orden; luego se captura con `capturePayPalOrder`. */
+  simulatorApprove(paypalOrderId: string, email: string, password: string): Observable<PayPalSimApproval> {
+    return this.http.post<PayPalSimApproval>(`${this.simulatorUrl}/approve`, {
+      paypal_order_id: paypalOrderId,
+      email,
+      password
+    });
+  }
+
+  /** Captura (cobra) una orden ya aprobada; el simulador exige su `approval_token`. */
+  captureOrder(paypalOrderId: string, approvalToken?: string): Observable<PayPalCaptureResult> {
+    return this.ventasService.capturePayPalOrder(paypalOrderId, approvalToken) as Observable<PayPalCaptureResult>;
   }
 
   /** Dibuja los botones oficiales de PayPal dentro de `container`. */

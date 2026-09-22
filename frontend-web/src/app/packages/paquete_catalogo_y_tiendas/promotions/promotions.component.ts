@@ -29,12 +29,14 @@ export class PromotionsComponent implements OnInit {
   // Campañas de Temporada
   promotions: SeasonalPromotion[] = [];
   categories: Category[] = [];
+  seasons: any[] = [];
   showPromoModal = false;
   newPromo: any = {
     name: '',
     description: '',
     discount_percent: 15,
     category_id: null,
+    season_id: null,
     start_date: '',
     end_date: '',
     is_active: true,
@@ -46,6 +48,9 @@ export class PromotionsComponent implements OnInit {
     this.loadData();
     this.catalogo.getCategories().subscribe({
       next: (cats) => (this.categories = cats || []),
+    });
+    this.catalogo.getSeasons().subscribe({
+      next: (seasons) => (this.seasons = seasons || []),
     });
   }
 
@@ -133,6 +138,7 @@ export class PromotionsComponent implements OnInit {
       description: '',
       discount_percent: 20,
       category_id: null,
+      season_id: null,
       start_date: today,
       end_date: nextWeek.toISOString().slice(0, 10),
       is_active: true,

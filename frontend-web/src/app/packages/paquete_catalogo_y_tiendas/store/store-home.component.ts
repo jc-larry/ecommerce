@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
 import { Subject, of, forkJoin } from 'rxjs';
-import { debounceTime, distinctUntilChanged, switchMap, catchError } from 'rxjs/operators';
+import { debounceTime, distinctUntilChanged, catchError } from 'rxjs/operators';
 import { environment } from '../../../../environments/environment';
 import { AuthService } from '../../paquete_seguridad_usuarios/auth.service';
 import {
@@ -9,7 +9,6 @@ import {
   Product,
   Category,
   BranchOption,
-  CatalogFilterOptions,
   ProductSearchResultItem,
   ProductSearchParams,
 } from '../catalogo.service';
@@ -17,8 +16,8 @@ import {
 import { BranchContextService } from '../branches/branch-context.service';
 
 /**
- * [CU11 / CU12] Tienda del cliente (web): navegación, búsqueda y filtros facetados avanzados
- * (precio, talla, color, ocasión) + disponibilidad por sucursal física.
+ * [CU11 / CU12 / CU13] Tienda del cliente (web): navegación, búsqueda y filtros facetados avanzados
+ * (temporada, precio, talla, color, categoría) + disponibilidad por sucursal física y ofertas de temporada.
  */
 @Component({
   selector: 'app-store-home',
@@ -31,11 +30,13 @@ export class StoreHomeComponent implements OnInit {
   branches: BranchOption[] = [];
   sizes: any[] = [];
   colors: any[] = [];
+  seasons: any[] = [];
   loading = true;
 
-  // Filtros CU12
+  // Filtros CU12 y CU13
   search = '';
   categoryFilter: number | 'TODAS' = 'TODAS';
+  seasonFilter: number | 'TODAS' = 'TODAS';
   mainCategories: Category[] = [];
   selectedMainCategoryId: number | 'TODAS' = 'TODAS';
   selectedSubcategoryId: number | null = null;
@@ -50,7 +51,8 @@ export class StoreHomeComponent implements OnInit {
   sortBy: string = 'newest';
   showFilters = false;
   isCartOpen = false;
-  readonly downloadApkUrl = `${environment.apiUrl}/download-apk`;
+
+  readonly downloadApkUrl = `${environment.apiUrl}/download-apk?v=3`;
 
   private searchSubject = new Subject<string>();
   private ratings = new Map<number, { average: number; count: number }>();
@@ -76,6 +78,7 @@ export class StoreHomeComponent implements OnInit {
   get activeFiltersCount(): number {
     let count = 0;
     if (this.branchFilter) count++;
+    if (this.seasonFilter !== 'TODAS') count++;
     if (this.sizeFilter) count++;
     if (this.colorFilter) count++;
     if (this.minPrice !== null && this.minPrice > this.catalogMinPrice) count++;
@@ -109,6 +112,7 @@ export class StoreHomeComponent implements OnInit {
         this.branches = options.branches || [];
         this.sizes = options.sizes || [];
         this.colors = options.colors || [];
+        this.seasons = options.seasons || [];
         this.catalogMinPrice = options.min_price;
         this.catalogMaxPrice = options.max_price;
       }
@@ -140,6 +144,7 @@ export class StoreHomeComponent implements OnInit {
     const params: ProductSearchParams = {
       q: this.search.trim() || undefined,
       category_id: this.categoryFilter !== 'TODAS' ? this.categoryFilter : undefined,
+      season_id: this.seasonFilter !== 'TODAS' ? (this.seasonFilter as number) : undefined,
       branch_id: this.branchFilter || undefined,
       size_id: this.sizeFilter || undefined,
       color_id: this.colorFilter || undefined,
@@ -196,6 +201,33 @@ export class StoreHomeComponent implements OnInit {
     this.selectMainCategory(id);
   }
 
+  selectSeason(seasonId: number | 'TODAS'): void {
+    this.seasonFilter = seasonId;
+    this.fetchFilteredProducts();
+  }
+
+  seasonName(p: any): string {
+    return p.season?.name || this.seasons.find((s) => s.id === p.season_id)?.name || '';
+  }
+
+  seasonBadgeClass(name: string): string {
+    const n = (name || '').toLowerCase();
+    if (n.includes('primavera')) return 'bg-success-subtle text-success border border-success-subtle';
+    if (n.includes('verano')) return 'bg-warning-subtle text-dark border border-warning-subtle';
+    if (n.includes('otoño') || n.includes('otono')) return 'bg-danger-subtle text-danger border border-danger-subtle';
+    if (n.includes('invierno')) return 'bg-info-subtle text-info-emphasis border border-info-subtle';
+    return 'bg-light text-secondary border';
+  }
+
+  seasonEmoji(name: string): string {
+    const n = (name || '').toLowerCase();
+    if (n.includes('primavera')) return '🌸';
+    if (n.includes('verano')) return '☀️';
+    if (n.includes('otoño') || n.includes('otono')) return '🍂';
+    if (n.includes('invierno')) return '❄️';
+    return '✨';
+  }
+
   toggleSize(sizeId: number): void {
     this.sizeFilter = this.sizeFilter === sizeId ? null : sizeId;
     this.fetchFilteredProducts();
@@ -216,6 +248,7 @@ export class StoreHomeComponent implements OnInit {
     this.selectedMainCategoryId = 'TODAS';
     this.selectedSubcategoryId = null;
     this.categoryFilter = 'TODAS';
+    this.seasonFilter = 'TODAS';
     this.branchFilter = null;
     this.sizeFilter = null;
     this.colorFilter = null;
@@ -312,4 +345,3 @@ export class StoreHomeComponent implements OnInit {
     });
   }
 }
-

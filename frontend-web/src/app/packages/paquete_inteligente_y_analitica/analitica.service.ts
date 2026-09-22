@@ -23,6 +23,54 @@ export interface VirtualTryonResult {
   created_at: string;
 }
 
+/** Una fila del perfil medido del torso de la prenda, en fracciones del recorte. */
+export interface GarmentRigRow {
+  y: number;
+  cx: number;
+  half: number;
+}
+
+/** Caja que ocupa cada manga dentro del recorte, a ambos lados del torso. */
+export interface GarmentRigSleeves {
+  y0: number;
+  y1: number;
+  left: { x0: number; x1: number };
+  right: { x0: number; x1: number };
+}
+
+/**
+ * Medidas reales de una prenda, calculadas por el backend sobre su recorte sin fondo.
+ * Sustituyen a las fracciones fijas (0.25 / 0.75 / 0.92...) con las que el probador
+ * anclaba antes la prenda y que descuadraban cualquier foto con márgenes distintos.
+ */
+export interface GarmentRig {
+  product_id: number;
+  cutout_url: string;
+  width: number;
+  height: number;
+  kind: 'top' | 'outer' | 'dress' | 'bottom';
+  sleeve: 'none' | 'short' | 'long';
+  torso?: {
+    rows: GarmentRigRow[];
+    neck_y: number;
+    shoulder_y: number;
+    chest_y: number;
+    hem_y: number;
+    length_ratio: number;
+    chest_half: number;
+    shoulder_half: number;
+  };
+  sleeves?: GarmentRigSleeves | null;
+  bottom?: {
+    waist: GarmentRigRow;
+    hip: GarmentRigRow;
+    crotch_y: number;
+    hem: GarmentRigRow;
+  };
+  measured: boolean;
+  cached?: boolean;
+}
+
 export interface RemoveBackgroundResult {
   processed_image_url: string;
   processing_time_sec: number;
@@ -190,6 +238,17 @@ export class AnaliticaService {
 
   startTryonSession(channel: string = 'WEB'): Observable<TryonSession> {
     return this.http.post<TryonSession>(`${this.baseUrl}/tryon/sessions`, { channel });
+  }
+
+  /**
+   * Rig de la prenda para el probador en vivo (cámara encendida).
+   *
+   * El backend recorta y mide la prenda una sola vez (y lo cachea en disco); a partir de
+   * ahí el navegador deforma el recorte sobre la pose en cada fotograma sin tocar la red.
+   */
+  getGarmentRig(productId: number, imageUrl?: string): Observable<GarmentRig> {
+    const params = imageUrl ? `?image_url=${encodeURIComponent(imageUrl)}` : '';
+    return this.http.get<GarmentRig>(`${this.baseUrl}/tryon/garment-rig/${productId}${params}`);
   }
 
   removeBackground(imageBase64: string): Observable<RemoveBackgroundResult> {

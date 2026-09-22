@@ -1,0 +1,57 @@
+{
+  "ok": true,
+  "mediapipe_version": "1.0.1",
+  "delegate": "CPU",
+  "threshold": 0.55,
+  "model": "C:\\Users\\MARILYN\\Documents\\Carpeta Esther\\Semestre 2-2026\\SI 2\\Primer_parcial\\entrenamiento_ia_ropa\\00_modelos_base\\pose_landmarker_lite.task",
+  "detected": 9,
+  "total": 9,
+  "minimum_required": 7,
+  "images": [
+    {
+      "file": "cuerpo_01_plus_size_curvy_bodysuit.jpg",
+      "detected": true,
+      "torso_confidence": 0.9997
+    },
+    {
+      "file": "cuerpo_02_plus_size_curvy_crop_shorts.jpg",
+      "detected": true,
+      "torso_confidence": 0.9999
+    },
+    {
+      "file": "cuerpo_03_pera_triangulo_caderas_anchas.jpg",
+      "detected": true,
+      "torso_confidence": 0.9998
+    },
+    {
+      "file": "cuerpo_04_ovalado_manzana_torso_redondo.jpg",
+      "detected": true,
+      "torso_confidence": 0.9998
+    },
+    {
+      "file": "cuerpo_05_rectangular_atletico_lineal.jpg",
+      "detected": true,
+      "torso_confidence": 0.9998
+    },
+    {
+      "file": "cuerpo_06_triangulo_invertido_atletico.jpg",
+      "detected": true,
+      "torso_confidence": 0.9998
+    },
+    {
+      "file": "cuerpo_07_reloj_arena_mediano_conjunto_blanco.jpg",
+      "detected": true,
+      "torso_confidence": 0.9999
+    },
+    {
+      "file": "cuerpo_08_esbelto_reloj_arena_bodysuit_negro.jpg",
+      "detected": true,
+      "torso_confidence": 0.9997
+    },
+    {
+      "file": "cuerpo_09_esbelto_atletico_crop_shorts.jpg",
+      "detected": true,
+      "torso_confidence": 0.9998
+    }
+  ]
+}

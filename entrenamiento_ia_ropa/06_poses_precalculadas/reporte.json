@@ -1,0 +1,30 @@
+{
+  "total_imagenes": 2842,
+  "con_pose": 2821,
+  "sin_pose": {
+    "v_092cdc4100eec0c7": "sin detección",
+    "v_0d0d885f5c33a179": "sin detección",
+    "v_141f85c7dad40c2c": "sin detección",
+    "v_1b19b7fe86f5253b": "sin detección",
+    "v_2a4d410c0ff75304": "sin detección",
+    "v_3e44f057f244d89e": "sin detección",
+    "v_424ee95ce20ce1b2": "sin detección",
+    "v_6645b3c560596e9a": "sin detección",
+    "v_67cec796df7165fd": "sin detección",
+    "v_6870489d272568c5": "sin detección",
+    "v_7e9279cb00dfa0c1": "sin detección",
+    "v_7fdb21e69a6ab900": "sin detección",
+    "v_862e8aef6878d898": "sin detección",
+    "v_8cc4ce324467fc3d": "sin detección",
+    "v_a63e4b48f7a0b98c": "sin detección",
+    "v_aea08f6199dffb29": "sin detección",
+    "v_b7060f847a9c1482": "sin detección",
+    "v_c9942a1392a6c9c2": "sin detección",
+    "v_d85ba46aab2bb637": "sin detección",
+    "v_df672ce791c7b663": "sin detección",
+    "v_fc59a6a9d59aa2e8": "sin detección"
+  },
+  "porcentaje_detectado": 99.3,
+  "umbral": 0.3,
+  "modelo": "pose_landmarker_lite.task"
+}

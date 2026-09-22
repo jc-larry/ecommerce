@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../paquete_seguridad_usuarios/auth_service.dart';
-import '../paquete_paquete_ventas_y_pagos/paypal_checkout.dart';
+import '../paquete_ventas_y_pagos/paypal_checkout.dart';
 import 'reservations_view.dart';
 
 const _brand = Color(0xFFC66F5C);

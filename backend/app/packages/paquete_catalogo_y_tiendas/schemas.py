@@ -137,8 +137,11 @@ class ProductResponse(ProductBase):
     # Calificaciones (CU14) — se rellenan en el router
     rating_avg: float = 0.0
     rating_count: int = 0
-    # Descuento calculado a partir de compare_at_price / base_price
+    # Descuento calculado a partir de compare_at_price / base_price o promoción de temporada (CU13)
     discount_percent: int = 0
+    seasonal_discount_percent: int = 0
+    seasonal_promotion_name: Optional[str] = None
+    effective_price: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -318,6 +321,7 @@ class SeasonalPromotionBase(BaseModel):
     description: Optional[str] = None
     discount_percent: int = Field(..., gt=0, le=100)
     category_id: Optional[int] = None
+    season_id: Optional[int] = None
     start_date: date
     end_date: date
     is_active: bool = True
@@ -330,6 +334,7 @@ class SeasonalPromotionUpdate(BaseModel):
     description: Optional[str] = None
     discount_percent: Optional[int] = Field(None, gt=0, le=100)
     category_id: Optional[int] = None
+    season_id: Optional[int] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: Optional[bool] = None
@@ -338,6 +343,7 @@ class SeasonalPromotionResponse(SeasonalPromotionBase):
     id: int
     created_at: datetime
     category: Optional[CategoryResponse] = None
+    season: Optional[SeasonResponse] = None
 
     class Config:
         from_attributes = True

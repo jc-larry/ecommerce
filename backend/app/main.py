@@ -48,6 +48,8 @@ from app.db.session import engine, Base
 # Migraciones ligeras idempotentes (mientras no se adopte Alembic): añadir columnas nuevas
 # a tablas que ya existían. `create_all` solo crea tablas faltantes, no columnas.
 _COLUMN_UPGRADES = [
+    "ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivery_latitude NUMERIC(10, 8)",
+    "ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivery_longitude NUMERIC(11, 8)",
     "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS avg_cost NUMERIC(10, 2) NOT NULL DEFAULT 0",
     "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stock_reservado INT NOT NULL DEFAULT 0",
     "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stock_en_transito INT NOT NULL DEFAULT 0",
@@ -133,6 +135,8 @@ _COLUMN_UPGRADES = [
     # Migraciones para Pagos y Pasarela PayPal (CU18, CU19)
     "ALTER TABLE payments ADD COLUMN IF NOT EXISTS paypal_payer_id VARCHAR(50)",
     "ALTER TABLE payments ADD COLUMN IF NOT EXISTS paypal_payer_email VARCHAR(100)",
+    # Migraciones para Promociones y Temporadas (CU13)
+    "ALTER TABLE seasonal_promotions ADD COLUMN IF NOT EXISTS season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL",
 ]
 
 # Normalización de datos: el correo es único e insensible a mayúsculas. Se pasan a
@@ -234,10 +238,12 @@ async def download_mobile_apk():
             return FileResponse(
                 path=apk_path,
                 media_type="application/vnd.android.package-archive",
-                filename="fashionstore.apk",
+                filename="fashionstore-v1.0.2.apk",
                 headers={
-                    "Content-Disposition": 'attachment; filename="fashionstore.apk"',
-                    "Cache-Control": "no-cache",
+                    "Content-Disposition": 'attachment; filename="fashionstore-v1.0.2.apk"',
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
                 }
             )
     raise HTTPException(

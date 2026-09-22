@@ -4,6 +4,7 @@ import { CatalogoService, Product, BranchOption } from '../../paquete_catalogo_y
 import { VentasService } from '../../paquete_ventas_y_pagos/ventas.service';
 import { AuthService } from '../../paquete_seguridad_usuarios/auth.service';
 import { PayPalCheckoutService, PayPalCaptureResult } from '../../paquete_ventas_y_pagos/paypal-checkout.service';
+import { DialogService } from '../../../shared/dialog.service';
 
 export interface FittingItem {
   product: Product;
@@ -65,19 +66,14 @@ export class CustomerReservationsComponent implements OnInit {
 
   // Simulador PayPal Sandbox
   showPayPalSimulator: boolean = false;
-  paypalSimulatorStep: 'REVIEW' | 'PROCESSING' | 'SUCCESS' = 'REVIEW';
   /** URL de aprobación real de PayPal (null en modo simulación sin credenciales sandbox). */
   paypalApproveUrl: string | null = null;
   paypalSimulated = true;
   paypalError = '';
   paypalOrderId: string = '';
   paypalApproved: boolean = false;
-  paypalProcessing: boolean = false;
-  paypalFundingSource: 'BALANCE' | 'CARD' = 'BALANCE';
-  paypalPayerEmail: string = 'cliente.sandbox@fashionstore.com';
-  paypalPayerName: string = 'Cliente Sandbox Bolivia';
+  paypalPayerEmail: string = '';
   paypalTransactionId: string = '';
-  paypalAuthTime: string = '';
   /** true mientras se cargan los botones oficiales de PayPal (modo conectado). */
   paypalButtonsLoading = false;
   readonly exchangeRateUsd: number = 6.96;
@@ -92,6 +88,7 @@ export class CustomerReservationsComponent implements OnInit {
     private ventasService: VentasService,
     public auth: AuthService,
     private paypalCheckout: PayPalCheckoutService,
+    public dialogService: DialogService,
   ) {}
 
   ngOnInit(): void {
@@ -163,19 +160,31 @@ export class CustomerReservationsComponent implements OnInit {
   // Agregar prenda al probador (hasta 5 prendas)
   addToFittingBag(p: Product, variantIndex: number = 0): void {
     if (this.fittingItems.length >= 5) {
-      alert('Puedes agendar hasta un máximo de 5 prendas por cita de probador.');
+      this.dialogService.alert({
+        title: 'Límite de Probador',
+        message: 'Puedes agendar hasta un máximo de 5 prendas por cita de probador.',
+        type: 'warning'
+      });
       return;
     }
 
     if (!p.variants || p.variants.length === 0) {
-      alert('Esta prenda no tiene variantes de talla disponibles.');
+      this.dialogService.alert({
+        title: 'Talla no Disponible',
+        message: 'Esta prenda no tiene variantes de talla disponibles por el momento.',
+        type: 'info'
+      });
       return;
     }
 
     const v = p.variants[variantIndex] || p.variants[0];
     const exists = this.fittingItems.find((it) => it.variantId === v.id);
     if (exists) {
-      alert('Esta prenda y talla ya está agregada en tu lista de probador.');
+      this.dialogService.alert({
+        title: 'Prenda ya Seleccionada',
+        message: 'Esta prenda y talla ya está agregada en tu lista de probador.',
+        type: 'info'
+      });
       return;
     }
 
@@ -231,44 +240,48 @@ export class CustomerReservationsComponent implements OnInit {
 
   openPaymentModal(): void {
     if (this.fittingItems.length === 0) {
-      alert('Agrega al menos una prenda a tu probador antes de agendar la cita.');
+      this.dialogService.alert({
+        title: 'Probador Vacío',
+        message: 'Agrega al menos una prenda a tu probador antes de agendar la cita.',
+        type: 'warning'
+      });
       return;
     }
     if (!this.primaryBranchId) {
-      alert('Por favor selecciona una sucursal para tu cita.');
+      this.dialogService.alert({
+        title: 'Selección de Sucursal',
+        message: 'Por favor selecciona una sucursal para tu cita de probador.',
+        type: 'warning'
+      });
       return;
     }
     if (!this.appointmentDate || !this.appointmentTime) {
-      alert('Por favor selecciona la fecha y hora de tu cita.');
+      this.dialogService.alert({
+        title: 'Horario Requerido',
+        message: 'Por favor selecciona la fecha y hora de tu cita.',
+        type: 'warning'
+      });
       return;
     }
     this.showPaymentModal = true;
   }
 
+  /** Abre PayPal: el simulador (por defecto) o los botones oficiales si el backend tiene PayPal real. */
   openPayPalSimulator(): void {
-    this.paypalSimulatorStep = 'REVIEW';
-    this.paypalProcessing = false;
     this.paypalError = '';
     this.showPayPalSimulator = true;
-
-    // Con credenciales en el backend se usa PayPal real (sandbox); sin ellas, el simulador.
     this.paypalCheckout.getConfig().subscribe({
       next: (config) => {
         this.paypalSimulated = config.simulated;
-        if (config.simulated) {
-          this.createSimulatedPayPalOrder();
-        } else {
-          this.renderRealPayPalButtons();
-        }
+        if (!config.simulated) this.renderRealPayPalButtons();
       },
-      error: () => (this.paypalError = 'No se pudo obtener la configuración de PayPal.')
+      error: () => (this.paypalSimulated = true)
     });
   }
 
   /** Modo conectado: botones oficiales de PayPal; el cliente inicia sesión en PayPal sandbox. */
   private renderRealPayPalButtons(): void {
     const amountBob = this.totalDepositRequired;
-    const description = `Seña 50% Reserva Probador FashionStore (${this.fittingItems.length} prendas)`;
     this.paypalButtonsLoading = true;
     // Espera a que Angular pinte el contenedor del modal.
     setTimeout(() => {
@@ -276,12 +289,9 @@ export class CustomerReservationsComponent implements OnInit {
       if (!container) return;
       this.paypalCheckout.renderButtons(container, {
         amountBob,
-        description,
+        description: this.paypalDescription,
         onApproved: (capture) => this.onPayPalCaptured(capture),
-        onError: (msg) => {
-          this.paypalSimulatorStep = 'REVIEW';
-          this.paypalError = msg;
-        },
+        onError: (msg) => (this.paypalError = msg),
         onCancel: () => (this.paypalError = 'Cancelaste el pago en PayPal. No se realizó ningún cobro.')
       })
         .catch((e: Error) => (this.paypalError = e.message))
@@ -289,60 +299,27 @@ export class CustomerReservationsComponent implements OnInit {
     });
   }
 
-  private createSimulatedPayPalOrder(): void {
-    if (this.paypalOrderId) return;
-    this.ventasService.createPayPalOrder(
-      this.totalDepositRequired,
-      `Seña 50% Reserva Probador FashionStore (${this.fittingItems.length} prendas)`
-    ).subscribe({
-      next: (order) => {
-        this.paypalOrderId = order.id;
-        this.paypalSimulated = !!order.simulated;
-      },
-      error: (e) => {
-        this.paypalOrderId = '';
-        this.paypalError = e?.error?.detail || 'No se pudo iniciar el pago con PayPal.';
-      }
-    });
+  get paypalDescription(): string {
+    return `Seña 50% Reserva Probador FashionStore (${this.fittingItems.length} prendas)`;
   }
 
-  /** Seña capturada por PayPal (real o simulada): guarda el comprobante para la reserva. */
-  private onPayPalCaptured(res: PayPalCaptureResult): void {
+  /** Cambia de los botones reales de PayPal al simulador. */
+  enableSimulator(): void {
+    this.paypalError = '';
+    this.paypalSimulated = true;
+  }
+
+  /**
+   * Seña capturada por PayPal (real o simulada): guarda el comprobante y confirma la reserva
+   * de inmediato con su cita y prendas apartadas.
+   */
+  onPayPalCaptured(res: PayPalCaptureResult): void {
     this.paypalOrderId = res.id;
     this.paypalApproved = true;
-    this.paypalProcessing = false;
     this.paypalTransactionId = res.gateway_reference || `PAYPAL:${res.capture_id || res.id}`;
     if (res.payer?.email_address) this.paypalPayerEmail = res.payer.email_address;
-    const name = [res.payer?.name?.given_name, res.payer?.name?.surname].filter(Boolean).join(' ');
-    if (name) this.paypalPayerName = name;
-    this.paypalAuthTime = new Date().toLocaleString('es-BO', { timeZone: 'America/La_Paz' });
-    this.paypalSimulatorStep = 'SUCCESS';
-  }
-
-  executePayPalSimulation(): void {
-    this.paypalSimulatorStep = 'PROCESSING';
-    this.paypalProcessing = true;
-
-    if (!this.paypalOrderId) {
-      this.paypalSimulatorStep = 'REVIEW';
-      this.paypalProcessing = false;
-      this.paypalError = this.paypalError || 'La orden de PayPal aún no está lista. Intenta nuevamente.';
-      return;
-    }
-    const orderIdToCapture = this.paypalOrderId;
-
-    // Simulamos latencia realista de autorización bancaria y llamada a API PayPal Sandbox
-    setTimeout(() => {
-      this.ventasService.capturePayPalOrder(orderIdToCapture).subscribe({
-        next: (res) => this.onPayPalCaptured(res),
-        error: (e) => {
-          this.paypalApproved = false;
-          this.paypalProcessing = false;
-          this.paypalSimulatorStep = 'REVIEW';
-          this.paypalError = e?.error?.detail || 'PayPal no confirmó el pago. No se realizó ningún cobro.';
-        }
-      });
-    }, 1400);
+    this.closePayPalSimulator();
+    if (!this.bookingInProgress) this.confirmBookingAndDeposit();
   }
 
   closePayPalSimulator(): void {
@@ -355,12 +332,15 @@ export class CustomerReservationsComponent implements OnInit {
     this.paypalOrderId = '';
     this.paypalApproveUrl = null;
     this.paypalError = '';
-    this.paypalSimulatorStep = 'REVIEW';
   }
 
   confirmBookingAndDeposit(): void {
     if (!this.auth.isLoggedIn()) {
-      alert('Debes iniciar sesión con tu cuenta para agendar una reserva.');
+      this.dialogService.alert({
+        title: 'Inicio de Sesión Requerido',
+        message: 'Debes iniciar sesión con tu cuenta para agendar una reserva y apartar las prendas en probador.',
+        type: 'info'
+      });
       return;
     }
 
@@ -368,17 +348,25 @@ export class CustomerReservationsComponent implements OnInit {
     if (this.paymentMethod === 'TARJETA') {
       const cleanCard = (this.cardNumber || '').replace(/\s+/g, '');
       if (cleanCard.length < 13) {
-        alert('Por favor ingresa un número de tarjeta válido (mínimo 13 dígitos).');
+        this.dialogService.alert({
+          title: 'Número de Tarjeta Inválido',
+          message: 'Por favor ingresa un número de tarjeta válido (mínimo 13 dígitos).',
+          type: 'warning'
+        });
         return;
       }
       if (!this.cardCvv || this.cardCvv.length < 3) {
-        alert('Por favor ingresa el código de seguridad CVV (3 o 4 dígitos).');
+        this.dialogService.alert({
+          title: 'Código CVV Requerido',
+          message: 'Por favor ingresa el código de seguridad CVV (3 o 4 dígitos).',
+          type: 'warning'
+        });
         return;
       }
       paymentRef = `TARJETA-${this.cardBrand}-****${cleanCard.slice(-4)}`;
     } else if (this.paymentMethod === 'PAYPAL') {
       if (!this.paypalApproved) {
-        // Si no ha procesado aún la pasarela PayPal, abrimos el simulador
+        // Si no ha procesado aún la pasarela PayPal, abrimos el modal
         this.openPayPalSimulator();
         return;
       }
@@ -431,12 +419,24 @@ export class CustomerReservationsComponent implements OnInit {
     return hoursRemaining >= 24;
   }
 
-  cancelReservation(r: Reservation): void {
+  async cancelReservation(r: Reservation): Promise<void> {
     if (!this.canCancelReservation(r)) {
-      alert('No es posible cancelar la cita con menos de 24 horas de anticipación. Las prendas ya se encuentran preparadas en probador y se considera venta perdida.');
+      await this.dialogService.alert({
+        title: 'Restricción de Cancelación (24h)',
+        message: 'No es posible cancelar la cita con menos de 24 horas de anticipación. Las prendas ya se encuentran preparadas en probador y se considera venta perdida.',
+        type: 'warning',
+        confirmText: 'Entendido'
+      });
       return;
     }
-    if (!confirm(`¿Deseas cancelar tu reserva ${r.reservation_code}? Las prendas serán liberadas de inmediato.`)) {
+    const confirmed = await this.dialogService.confirm({
+      title: 'Confirmar Cancelación de Cita',
+      message: `¿Deseas cancelar tu reserva ${r.reservation_code}? Las prendas serán liberadas de inmediato y devueltas al inventario disponible.`,
+      type: 'danger',
+      confirmText: 'Sí, cancelar reserva',
+      cancelText: 'Volver'
+    });
+    if (!confirmed) {
       return;
     }
     this.reservasService.cancelReservation(r.id).subscribe({

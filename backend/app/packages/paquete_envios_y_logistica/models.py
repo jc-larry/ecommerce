@@ -46,6 +46,9 @@ class Shipment(Base):
     carrier_name: Mapped[str] = mapped_column(String(100), default="Moto Express", nullable=False)
     carrier_phone: Mapped[Optional[str]] = mapped_column(String(20))
     delivery_address: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Punto de entrega marcado por el cliente en el mapa.
+    delivery_latitude: Mapped[Optional[float]] = mapped_column(Numeric(10, 8), nullable=True)
+    delivery_longitude: Mapped[Optional[float]] = mapped_column(Numeric(11, 8), nullable=True)
     recipient_name: Mapped[str] = mapped_column(String(100), nullable=False)
     recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     shipping_cost: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, nullable=False)

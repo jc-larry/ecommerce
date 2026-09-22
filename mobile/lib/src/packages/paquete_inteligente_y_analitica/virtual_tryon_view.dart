@@ -2,11 +2,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import '../paquete_paquete_catalogo_y_tiendas/catalog_api.dart';
+import '../paquete_catalogo_y_tiendas/catalog_api.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
-import '../paquete_paquete_catalogo_y_tiendas/product_detail_view.dart';
-import '../paquete_paquete_ventas_y_pagos/ventas_api.dart';
-import '../paquete_paquete_ventas_y_pagos/cart_view.dart';
+import '../paquete_catalogo_y_tiendas/product_detail_view.dart';
+import '../paquete_ventas_y_pagos/ventas_api.dart';
+import '../paquete_ventas_y_pagos/cart_view.dart';
+import 'live_mirror_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -60,6 +61,16 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
   double _overlayOffsetY = 0.0;
   double _overlayOpacity = 0.95;
 
+  // Motor Generativo Fotorrealista VTON (IA)
+  String? _vtonGeneratedImageUrl;
+  bool _generatingVton = false;
+  String? _vtonModelUsed;
+  int? _vtonProcessingTime;
+  String? _vtonStyleAdvice;
+  bool _showVtonResult = true;
+  String? _garmentCutoutUrl;
+  String _selectedAIModel = 'IDM-VTON';
+
   @override
   void initState() {
     super.initState();
@@ -104,12 +115,37 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
               _selectedProduct = _products.first as Map<String, dynamic>?;
               _selectedProductId = _selectedProduct?['id'] as int?;
             }
+            if (_selectedProductId != null) {
+              _loadGarmentCutout(_selectedProductId!);
+            }
           }
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadGarmentCutout(int productId) async {
+    try {
+      final token = await AuthService.getToken();
+      final url = Uri.parse('${AuthService.apiBaseUrl}/analytics/tryon/garment-rig/$productId');
+      final r = await http.get(
+        url,
+        headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode == 200 && mounted) {
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        final cutout = data['cutout_url']?.toString();
+        if (cutout != null && cutout.isNotEmpty) {
+          setState(() {
+            _garmentCutoutUrl = CatalogApi.resolveImage(cutout);
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   String? _getGarmentImage(Map<String, dynamic>? p) {
@@ -136,7 +172,13 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
       _selectedProduct = p;
       _selectedProductId = p['id'] as int;
       _result = null; // Reiniciar simulación para la nueva prenda
+      _vtonGeneratedImageUrl = null; // Reiniciar resultado IA para la nueva prenda
+      _vtonModelUsed = null;
+      _garmentCutoutUrl = null;
     });
+    if (p['id'] != null) {
+      _loadGarmentCutout(p['id'] as int);
+    }
   }
 
   /// Abrir modal visual completo para explorar y seleccionar cualquier prenda con fotos y filtros
@@ -367,8 +409,38 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
       setState(() {
         _userCustomPhotoUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
         _visualMode = 'photo';
+        _vtonGeneratedImageUrl = null;
+        _showVtonResult = true;
       });
     }
+  }
+
+  /// Factor de ajuste de la prenda a partir de la talla biométrica.
+  ///
+  /// Es el mismo criterio que usa el probador de la web: la prenda no se dibuja siempre
+  /// del mismo tamaño, sino escalada a la talla que sale de las medidas de la clienta.
+  double get _fitScale {
+    final chest = double.tryParse(_chestCtrl.text) ?? 94;
+    if (chest < 86) return 0.94;
+    if (chest <= 92) return 0.98;
+    if (chest <= 100) return 1.04;
+    if (chest <= 108) return 1.12;
+    if (chest <= 116) return 1.20;
+    return 1.28;
+  }
+
+  /// Abre el espejo en vivo: cámara encendida y prenda puesta sobre el cuerpo.
+  void _openLiveMirror() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LiveMirrorView(
+          products: _products,
+          initialProductId: _selectedProductId,
+          fitScale: _fitScale,
+        ),
+      ),
+    );
   }
 
   Future<void> _takeCameraPhoto() async {
@@ -379,7 +451,100 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
       setState(() {
         _userCustomPhotoUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
         _visualMode = 'photo';
+        _vtonGeneratedImageUrl = null;
+        _showVtonResult = true;
       });
+    }
+  }
+
+  /// [CU32] Generación fotorrealista con IA generativa (VTON fotorrealista).
+  /// Invoca /analytics/tryon/generate-vton para sintetizar la prenda sobre el cuerpo real.
+  Future<void> _generateVtonLook() async {
+    if (_userCustomPhotoUrl == null || _selectedProductId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor toma o sube una foto tuya primero.')),
+      );
+      return;
+    }
+    final currentGarmentImg = _getGarmentImage(_selectedProduct);
+    if (currentGarmentImg == null || currentGarmentImg.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La prenda seleccionada no tiene fotografía para la prueba.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _generatingVton = true;
+      _error = null;
+    });
+
+    try {
+      final token = await AuthService.getToken();
+      final url = Uri.parse('${AuthService.apiBaseUrl}/analytics/tryon/generate-vton');
+      final catName = (_selectedProduct?['category']?['name'] ?? _selectedProduct?['category'] ?? 'tops').toString();
+      final recSize = _result?['recommended_size'] ?? 'M';
+
+      final response = await http.post(
+        url,
+        headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'product_id': _selectedProductId,
+          'person_image': _userCustomPhotoUrl,
+          'garment_image': currentGarmentImg,
+          'category': catName,
+          'model_choice': _selectedAIModel,
+          'recommended_size': recSize,
+        }),
+      ).timeout(const Duration(seconds: 90));
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        setState(() {
+          _vtonGeneratedImageUrl = data['result_image_url'] as String?;
+          _vtonModelUsed = data['generation_model'] as String?;
+          final secs = data['processing_time_sec'];
+          _vtonProcessingTime = secs is num ? secs.round() : null;
+          _vtonStyleAdvice = data['style_advice'] as String?;
+          _showVtonResult = true;
+          _generatingVton = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF2E7D32),
+            content: Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: Colors.white),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '¡Look fotorrealista generado con ${_vtonModelUsed ?? "IA"} exitosamente!',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      } else {
+        final err = jsonDecode(utf8.decode(response.bodyBytes));
+        setState(() {
+          _generatingVton = false;
+          _error = err['detail'] ?? 'No se pudo generar la prueba fotorrealista (código ${response.statusCode}).';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _generatingVton = false;
+          _error = 'Error de conexión con el motor VTON de IA: $e';
+        });
+      }
     }
   }
 
@@ -911,8 +1076,13 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: const Color(0xFFECE6E2)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            // "Cámara" ahora abre el espejo en vivo, que es lo que se espera al encenderla:
+            // la prenda puesta y siguiendo a la persona. Sacar una foto fija sigue estando,
+            // pero como opción aparte ("Foto"), porque alimenta al motor de difusión.
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 6,
+              runSpacing: 4,
               children: [
                 ChoiceChip(
                   avatar: const Icon(Icons.person, size: 16),
@@ -922,9 +1092,16 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
                   onSelected: (_) => setState(() => _visualMode = 'mannequin'),
                 ),
                 ChoiceChip(
+                  avatar: const Icon(Icons.videocam, size: 16),
+                  label: const Text('En vivo', style: TextStyle(fontSize: 12)),
+                  selected: false,
+                  selectedColor: _brand.withValues(alpha: 0.15),
+                  onSelected: (_) => _openLiveMirror(),
+                ),
+                ChoiceChip(
                   avatar: const Icon(Icons.camera_alt, size: 16),
-                  label: const Text('Cámara', style: TextStyle(fontSize: 12)),
-                  selected: _visualMode == 'photo',
+                  label: const Text('Foto', style: TextStyle(fontSize: 12)),
+                  selected: _visualMode == 'photo' && _userCustomPhotoUrl == null,
                   selectedColor: _brand.withValues(alpha: 0.15),
                   onSelected: (_) => _takeCameraPhoto(),
                 ),
@@ -942,61 +1119,162 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
 
           // Escenario del Vestidor (Espejo 9:16)
           Container(
-            height: 380,
+            height: 390,
             width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFFEFEFEF),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFD6CDC8), width: 1.5),
+              border: Border.all(
+                color: _vtonGeneratedImageUrl != null && _showVtonResult
+                    ? const Color(0xFF2E7D32)
+                    : const Color(0xFFD6CDC8),
+                width: 2,
+              ),
               boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 4)),
+                BoxShadow(
+                  color: _vtonGeneratedImageUrl != null && _showVtonResult
+                      ? Colors.green.withValues(alpha: 0.15)
+                      : Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
               ],
             ),
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // 1. Fondo de silueta / foto
-                if (_visualMode == 'mannequin' || _userCustomPhotoUrl == null)
-                  Center(
-                    child: Opacity(
-                      opacity: 0.35,
-                      child: Icon(
-                        _gender == 'female' ? Icons.woman : Icons.man,
-                        size: 280,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  )
-                else if (_userCustomPhotoUrl != null)
+                // FORMATO 1: RESULTADO FOTORREALISTA CON IA (SI YA SE GENERÓ Y ESTÁ ACTIVO)
+                if (_vtonGeneratedImageUrl != null && _showVtonResult)
                   Positioned.fill(
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(18),
-                      child: Image.memory(
-                        base64Decode(_userCustomPhotoUrl!.split(',').last),
-                        fit: BoxFit.cover,
-                      ),
+                      child: _vtonGeneratedImageUrl!.startsWith('data:image')
+                          ? Image.memory(
+                              base64Decode(_vtonGeneratedImageUrl!.split(',').last),
+                              fit: BoxFit.cover,
+                            )
+                          : Image.network(
+                              CatalogApi.resolveImage(_vtonGeneratedImageUrl),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Center(
+                                child: Icon(Icons.broken_image, size: 60, color: Colors.grey),
+                              ),
+                            ),
                     ),
-                  ),
-
-                // 2. Prenda superpuesta con controles de posición
-                if (currentGarmentImg != null)
-                  Transform.translate(
-                    offset: Offset(0, _overlayOffsetY),
-                    child: Transform.scale(
-                      scale: _overlayScale,
+                  )
+                // FORMATO 2: AJUSTE INTERACTIVO (FOTO/MANIQUÍ + PRENDA CALIBRADA)
+                else ...[
+                  // 1. Fondo de silueta / foto
+                  if (_visualMode == 'mannequin' || _userCustomPhotoUrl == null)
+                    Center(
                       child: Opacity(
-                        opacity: _overlayOpacity,
-                        child: Image.network(
-                          currentGarmentImg,
-                          height: 220,
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, __, ___) => const Icon(Icons.checkroom, size: 80, color: _brand),
+                        opacity: 0.35,
+                        child: Icon(
+                          _gender == 'female' ? Icons.woman : Icons.man,
+                          size: 280,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    )
+                  else if (_userCustomPhotoUrl != null)
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.memory(
+                          base64Decode(_userCustomPhotoUrl!.split(',').last),
+                          fit: BoxFit.cover,
                         ),
                       ),
                     ),
+
+                  // 2. Prenda superpuesta con controles de posición interactivos
+                  if (currentGarmentImg != null)
+                    Transform.translate(
+                      offset: Offset(0, _overlayOffsetY),
+                      child: Transform.scale(
+                        scale: _overlayScale,
+                        child: Opacity(
+                          opacity: _overlayOpacity,
+                          child: Image.network(
+                            _garmentCutoutUrl ?? currentGarmentImg,
+                            height: 220,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(Icons.checkroom, size: 80, color: _brand),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+
+                // Indicador de carga de IA Generativa VTON
+                if (_generatingVton)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.75),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: Colors.white),
+                          SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.auto_awesome, color: Color(0xFFF6C28B), size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Generando prueba con IA...',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Sintetizando drapeado, caída y sombras de tela',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
 
-                // Badge de prenda y talla
+                // Badge de Formato Activo (arriba a la izquierda)
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _vtonGeneratedImageUrl != null && _showVtonResult
+                          ? const Color(0xFF2E7D32)
+                          : Colors.black54,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _vtonGeneratedImageUrl != null && _showVtonResult
+                              ? Icons.auto_awesome
+                              : Icons.tune,
+                          color: Colors.white,
+                          size: 13,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          _vtonGeneratedImageUrl != null && _showVtonResult
+                              ? 'Look Fotorrealista (IA)'
+                              : 'Ajuste Interactivo',
+                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Badge de prenda y talla (arriba a la derecha)
                 Positioned(
                   top: 12,
                   right: 12,
@@ -1027,51 +1305,278 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
           ),
           const SizedBox(height: 12),
 
-          // Ajustes finos de la prenda en el vestidor
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFECE6E2)),
-            ),
-            child: Column(
-              children: [
-                Row(
+          // CONTROLES DE AMBOS FORMATOS (Fotorrealista vs Interactivo)
+          if (_visualMode == 'photo' && _userCustomPhotoUrl != null) ...[
+            if (_vtonGeneratedImageUrl == null) ...[
+              // Selector de modelo IA idéntico a la web
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1EAE5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE2D7CF)),
+                ),
+                child: Row(
                   children: [
-                    const Icon(Icons.aspect_ratio, size: 18, color: _muted),
-                    const SizedBox(width: 8),
-                    const Text('Escala:', style: TextStyle(fontSize: 12, color: _muted)),
                     Expanded(
-                      child: Slider(
-                        value: _overlayScale,
-                        min: 0.7,
-                        max: 1.4,
-                        activeColor: _brand,
-                        onChanged: (v) => setState(() => _overlayScale = v),
+                      child: InkWell(
+                        onTap: () => setState(() => _selectedAIModel = 'IDM-VTON'),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _selectedAIModel == 'IDM-VTON' ? _brand : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: _selectedAIModel == 'IDM-VTON'
+                                ? [BoxShadow(color: _brand.withValues(alpha: 0.25), blurRadius: 6, offset: const Offset(0, 2))]
+                                : null,
+                          ),
+                          child: Center(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.auto_awesome, size: 14, color: _selectedAIModel == 'IDM-VTON' ? Colors.white : _muted),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'IDM-VTON',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: _selectedAIModel == 'IDM-VTON' ? Colors.white : _muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => setState(() => _selectedAIModel = 'FASHN_AI'),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _selectedAIModel == 'FASHN_AI' ? _brand : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: _selectedAIModel == 'FASHN_AI'
+                                ? [BoxShadow(color: _brand.withValues(alpha: 0.25), blurRadius: 6, offset: const Offset(0, 2))]
+                                : null,
+                          ),
+                          child: Center(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.blur_on, size: 14, color: _selectedAIModel == 'FASHN_AI' ? Colors.white : _muted),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'Fashn.ai',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: _selectedAIModel == 'FASHN_AI' ? Colors.white : _muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],
                 ),
-                Row(
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _generatingVton ? null : _generateVtonLook,
+                  icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
+                  label: Text(
+                    '✨ Generar Look Fotorrealista con $_selectedAIModel',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2E7D32),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ] else ...[
+              // Selector de formato cuando ya se generó el look con IA
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFECE6E2)),
+                ),
+                child: Row(
                   children: [
-                    const Icon(Icons.vertical_align_center, size: 18, color: _muted),
-                    const SizedBox(width: 8),
-                    const Text('Altura:', style: TextStyle(fontSize: 12, color: _muted)),
                     Expanded(
-                      child: Slider(
-                        value: _overlayOffsetY,
-                        min: -50,
-                        max: 50,
-                        activeColor: _brand,
-                        onChanged: (v) => setState(() => _overlayOffsetY = v),
+                      child: InkWell(
+                        onTap: () => setState(() => _showVtonResult = true),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _showVtonResult ? const Color(0xFF2E7D32).withValues(alpha: 0.15) : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: _showVtonResult ? const Color(0xFF2E7D32) : Colors.transparent,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.auto_awesome, size: 16, color: _showVtonResult ? const Color(0xFF2E7D32) : _muted),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Look IA Fotorrealista',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: _showVtonResult ? const Color(0xFF2E7D32) : _muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => setState(() => _showVtonResult = false),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: !_showVtonResult ? _brand.withValues(alpha: 0.15) : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: !_showVtonResult ? _brand : Colors.transparent,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.tune, size: 16, color: !_showVtonResult ? _brand : _muted),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Ajuste Interactivo',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: !_showVtonResult ? _brand : _muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      tooltip: 'Regenerar con IA',
+                      onPressed: _generatingVton ? null : _generateVtonLook,
+                      icon: const Icon(Icons.refresh, size: 20, color: _brand),
                     ),
                   ],
                 ),
+              ),
+              const SizedBox(height: 10),
+              // Mensaje de detalle de IA si está activa la vista fotorrealista
+              if (_vtonGeneratedImageUrl != null && _showVtonResult) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.auto_awesome, color: Color(0xFF2E7D32), size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Sintetizado con ${_vtonModelUsed ?? "IA Generativa"} en ${_vtonProcessingTime ?? 2}s',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF1B5E20)),
+                            ),
+                            if (_vtonStyleAdvice != null) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                _vtonStyleAdvice!,
+                                style: TextStyle(fontSize: 11, color: Colors.green.shade900),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
               ],
+            ],
+          ],
+
+          // Sliders de ajuste interactivo (cuando está en vista interactiva o maniquí)
+          if (!_showVtonResult || _vtonGeneratedImageUrl == null || _visualMode == 'mannequin')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFECE6E2)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.aspect_ratio, size: 18, color: _muted),
+                      const SizedBox(width: 8),
+                      const Text('Escala:', style: TextStyle(fontSize: 12, color: _muted)),
+                      Expanded(
+                        child: Slider(
+                          value: _overlayScale,
+                          min: 0.7,
+                          max: 1.4,
+                          activeColor: _brand,
+                          onChanged: (v) => setState(() => _overlayScale = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Icon(Icons.vertical_align_center, size: 18, color: _muted),
+                      const SizedBox(width: 8),
+                      const Text('Altura:', style: TextStyle(fontSize: 12, color: _muted)),
+                      Expanded(
+                        child: Slider(
+                          value: _overlayOffsetY,
+                          min: -50,
+                          max: 50,
+                          activeColor: _brand,
+                          onChanged: (v) => setState(() => _overlayOffsetY = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

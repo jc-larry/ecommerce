@@ -5,13 +5,14 @@ import '../paquete_seguridad_usuarios/register_view.dart';
 import 'catalogo_view.dart';
 import 'home_view.dart';
 import 'wishlist_view.dart';
-import '../paquete_paquete_ventas_y_pagos/cart_view.dart';
-import '../paquete_paquete_ventas_y_pagos/customer_orders_view.dart';
-import '../paquete_paquete_reservas_y_citas/reservations_view.dart';
-import '../paquete_paquete_envios_y_logistica/tracking_view.dart';
-import '../paquete_paquete_inteligente_y_analitica/virtual_tryon_view.dart';
-import '../paquete_paquete_inteligente_y_analitica/chatbot_view.dart';
-import '../paquete_paquete_notificaciones/notifications_view.dart';
+import '../paquete_ventas_y_pagos/cart_view.dart';
+import '../paquete_ventas_y_pagos/cart_notifier.dart';
+import '../paquete_ventas_y_pagos/customer_orders_view.dart';
+import '../paquete_reservas_y_citas/reservations_view.dart';
+import '../paquete_envios_y_logistica/tracking_view.dart';
+import '../paquete_inteligente_y_analitica/virtual_tryon_view.dart';
+import '../paquete_inteligente_y_analitica/chatbot_view.dart';
+import '../paquete_notificaciones/notifications_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -42,6 +43,18 @@ class _StoreShellState extends State<StoreShell> {
     if (voice) _voiceTrigger.value++;
   }
 
+  Widget _cartIcon(IconData icon, Color? color) {
+    return ValueListenableBuilder<int>(
+      valueListenable: CartNotifier.itemsCount,
+      builder: (_, count, __) => Badge(
+        isLabelVisible: count > 0,
+        label: Text(count > 99 ? '99+' : '$count'),
+        backgroundColor: _brand,
+        child: Icon(icon, color: color),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
@@ -67,14 +80,21 @@ class _StoreShellState extends State<StoreShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) {
           setState(() => _index = i);
+          // El carrito se construyó al abrir la app: al entrar se sincroniza con el servidor
+          // (cubre también el inicio de sesión posterior y compras hechas desde la web).
+          if (i == 2) CartNotifier.notifyChanged();
         },
         indicatorColor: const Color(0xFFF6E3DD),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: _brand), label: 'Inicio'),
-          NavigationDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view, color: _brand), label: 'Catálogo'),
-          NavigationDestination(icon: Icon(Icons.shopping_bag_outlined), selectedIcon: Icon(Icons.shopping_bag, color: _brand), label: 'Carrito'),
-          NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite, color: _brand), label: 'Favoritos'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: _brand), label: 'Perfil'),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: _brand), label: 'Inicio'),
+          const NavigationDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view, color: _brand), label: 'Catálogo'),
+          NavigationDestination(
+            icon: _cartIcon(Icons.shopping_bag_outlined, null),
+            selectedIcon: _cartIcon(Icons.shopping_bag, _brand),
+            label: 'Carrito',
+          ),
+          const NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite, color: _brand), label: 'Favoritos'),
+          const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: _brand), label: 'Perfil'),
         ],
       ),
     );

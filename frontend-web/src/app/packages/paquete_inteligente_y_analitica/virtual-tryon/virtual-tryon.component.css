@@ -92,6 +92,12 @@
   z-index: 6;
 }
 
+.pose-garment-canvas {
+  z-index: 10;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.22));
+}
+
 /* PUNTOS ANATÓMICOS BIOMÉTRICOS */
 .biometric-landmarks-overlay {
   z-index: 8;
@@ -314,4 +320,11 @@
 @keyframes shimmer {
   from { background-position: -200% center; }
   to { background-position: 200% center; }
+}
+
+/* Volteo de espejo del probador en vivo.
+   Se aplica por igual al video y al lienzo de la prenda: si solo se volteara uno, la
+   prenda aparecería en el lado contrario del cuerpo. */
+.mirror-flip {
+  transform: scaleX(-1);
 }

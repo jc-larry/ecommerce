@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'src/packages/paquete_seguridad_usuarios/auth_service.dart';
-import 'src/packages/paquete_paquete_catalogo_y_tiendas/store_shell.dart';
-import 'src/packages/paquete_paquete_envios_y_logistica/delivery_dashboard_view.dart';
+import 'src/packages/paquete_catalogo_y_tiendas/store_shell.dart';
+import 'src/packages/paquete_envios_y_logistica/delivery_dashboard_view.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await AuthService.init();
-  // Si quedó abierta la sesión de un repartidor, la app arranca en su panel de entregas.
-  final isRepartidor = await AuthService.isLoggedIn() && await AuthService.isRepartidor();
+  bool isRepartidor = false;
+  try {
+    await AuthService.init();
+    // Si quedó abierta la sesión de un repartidor, la app arranca en su panel de entregas.
+    isRepartidor = await AuthService.isLoggedIn() && await AuthService.isRepartidor();
+  } catch (e) {
+    debugPrint('Error en inicio de app: $e');
+  }
   runApp(FashionStoreApp(startInDeliveryPanel: isRepartidor));
 }
 

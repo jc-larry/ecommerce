@@ -70,10 +70,23 @@ class PayPalOrderCreateRequest(BaseModel):
     amount_bob: float = Field(..., gt=0, description="Monto total en Bolivianos")
     description: Optional[str] = "Pago en FashionStore"
     reference_id: Optional[str] = None
+    force_simulation: Optional[bool] = False
 
 
 class PayPalOrderCaptureRequest(BaseModel):
     paypal_order_id: str = Field(..., description="ID de la orden aprobada en PayPal")
+    approval_token: Optional[str] = Field(None, description="Simulador: token de /simulator/approve")
+
+
+class PayPalSimulatorLoginRequest(BaseModel):
+    """Credenciales de la cuenta compradora del simulador de PayPal."""
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class PayPalSimulatorApproveRequest(PayPalSimulatorLoginRequest):
+    """El comprador inicia sesión y aprueba (paga) una orden simulada."""
+    paypal_order_id: str = Field(..., description="ID de la orden simulada (PAYPAL-SIM-...)")
 
 
 class CheckoutRequest(BaseModel):
@@ -91,6 +104,16 @@ class CheckoutRequest(BaseModel):
     customer_name: Optional[str] = None
     cash_shift_id: Optional[int] = None
     pos_items: Optional[List[CartItemAdd]] = None
+    shipping_method: Optional[str] = Field("DELIVERY", pattern="^(DELIVERY|PICKUP)$")
+    delivery_address: Optional[str] = None
+    recipient_name: Optional[str] = None
+    recipient_phone: Optional[str] = None
+    delivery_notes: Optional[str] = None
+    zone_id: Optional[int] = None
+    shipping_cost: Optional[float] = 0.0
+    # Punto exacto marcado por el cliente en el mapa (CU29).
+    delivery_latitude: Optional[float] = Field(None, ge=-90, le=90)
+    delivery_longitude: Optional[float] = Field(None, ge=-180, le=180)
 
 
 class OrderItemResponse(BaseModel):
@@ -157,6 +180,9 @@ class OrderResponse(BaseModel):
     items: List[OrderItemResponse]
     payments: List[PaymentResponse]
     invoice: Optional[InvoiceResponse] = None
+    tracking_number: Optional[str] = None
+    delivery_address: Optional[str] = None
+    shipping_method: Optional[str] = None
 
     class Config:
         from_attributes = True

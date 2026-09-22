@@ -67,6 +67,8 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<!-- Permisos de sistema (iOS los exige o la app se cierra al usar el recurso) -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>FashionStore usa tu ubicación para marcar en el mapa el punto de entrega de tu pedido.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>FashionStore usa la cámara para el vestidor virtual y para la foto de evidencia de entrega.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

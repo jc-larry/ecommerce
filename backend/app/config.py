@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -51,10 +51,41 @@ class Settings:
     # --- Pasarela de Pago PayPal (Sandbox / Producción) ---
     # Credenciales de la app REST creada en https://developer.paypal.com (Apps & Credentials).
     # Vacías => modo simulación (sin cobro). Con credenciales sandbox => conexión real con PayPal.
-    PAYPAL_CLIENT_ID: str = os.getenv("PAYPAL_CLIENT_ID", "")
-    PAYPAL_CLIENT_SECRET: str = os.getenv("PAYPAL_CLIENT_SECRET", "")
-    PAYPAL_MODE: str = os.getenv("PAYPAL_MODE", "sandbox")  # 'sandbox' o 'live'
-    PAYPAL_EXCHANGE_RATE_BOB_USD: float = float(os.getenv("PAYPAL_EXCHANGE_RATE_BOB_USD", "6.96"))
+    @property
+    def PAYPAL_CLIENT_ID(self) -> str:
+        return os.getenv("PAYPAL_CLIENT_ID", "")
+
+    @property
+    def PAYPAL_CLIENT_SECRET(self) -> str:
+        return os.getenv("PAYPAL_CLIENT_SECRET", "")
+
+    @property
+    def PAYPAL_MODE(self) -> str:
+        return os.getenv("PAYPAL_MODE", "sandbox")
+
+    @property
+    def PAYPAL_EXCHANGE_RATE_BOB_USD(self) -> float:
+        return float(os.getenv("PAYPAL_EXCHANGE_RATE_BOB_USD", "6.96"))
+
+    # --- Simulador de PayPal ---
+    # La cuenta PayPal del comercio está registrada en Bolivia (BOB) y no puede recibir cobros,
+    # así que por defecto se usa el simulador: misma experiencia de PayPal (login + revisión)
+    # sin contactar a PayPal. PAYPAL_SIMULATION=false vuelve a la conexión real sandbox/live.
+    @property
+    def PAYPAL_SIMULATION(self) -> bool:
+        return os.getenv("PAYPAL_SIMULATION", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def PAYPAL_SIM_EMAIL(self) -> str:
+        return os.getenv("PAYPAL_SIM_EMAIL", "condoridiaz2005@gmail.com").strip().lower()
+
+    @property
+    def PAYPAL_SIM_PASSWORD(self) -> str:
+        return os.getenv("PAYPAL_SIM_PASSWORD", "Mari123!")
+
+    @property
+    def PAYPAL_SIM_NAME(self) -> str:
+        return os.getenv("PAYPAL_SIM_NAME", "Marilyn Esther")
 
     @property
     def paypal_api_base(self) -> str:

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'catalog_api.dart';
-import '../paquete_paquete_ventas_y_pagos/ventas_api.dart';
-import '../paquete_paquete_ventas_y_pagos/cart_view.dart';
+import '../paquete_ventas_y_pagos/ventas_api.dart';
+import '../paquete_ventas_y_pagos/cart_view.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
 import '../paquete_seguridad_usuarios/login_view.dart';
-import '../paquete_paquete_reservas_y_citas/reserve_fitting_view.dart';
-import '../paquete_paquete_inteligente_y_analitica/virtual_tryon_view.dart';
+import '../paquete_reservas_y_citas/reserve_fitting_view.dart';
+import '../paquete_inteligente_y_analitica/virtual_tryon_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -415,6 +415,7 @@ class _ProductDetailViewState extends State<ProductDetailView> {
   /// Acciones principales fijas abajo: no se pierden al hacer scroll por la galería.
   Widget _bottomBar() {
     final base = (_product!['base_price'] as num).toDouble();
+    final effectivePrice = _product!['effective_price'] != null ? (_product!['effective_price'] as num).toDouble() : base;
     return SafeArea(
       top: false,
       child: Container(
@@ -429,8 +430,17 @@ class _ProductDetailViewState extends State<ProductDetailView> {
               _selectedSizeName.isEmpty ? 'Precio' : 'Talla $_selectedSizeName',
               style: const TextStyle(fontSize: 11, color: _muted),
             ),
-            Text('Bs. ${base.toStringAsFixed(0)}',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _brand)),
+            Row(
+              children: [
+                Text('Bs. ${effectivePrice.toStringAsFixed(0)}',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _brand)),
+                if (effectivePrice < base) ...[
+                  const SizedBox(width: 4),
+                  Text('Bs. ${base.toStringAsFixed(0)}',
+                      style: const TextStyle(fontSize: 12, decoration: TextDecoration.lineThrough, color: Color(0xFFA99C98))),
+                ],
+              ],
+            ),
           ]),
           const SizedBox(width: 10),
           IconButton.outlined(
@@ -465,8 +475,12 @@ class _ProductDetailViewState extends State<ProductDetailView> {
   Widget _content() {
     final p = _product!;
     final base = (p['base_price'] as num).toDouble();
+    final effectivePrice = p['effective_price'] != null ? (p['effective_price'] as num).toDouble() : base;
     final cmp = p['compare_at_price'] == null ? null : (p['compare_at_price'] as num).toDouble();
     final disc = p['discount_percent'] as int? ?? 0;
+    final seasonalDiscount = p['seasonal_discount_percent'] as int? ?? 0;
+    final seasonalPromoName = p['seasonal_promotion_name'] as String?;
+    final seasonName = p['season'] != null ? (p['season']['name'] as String?) : null;
     final urls = _galleryUrls;
 
     return ListView(
@@ -490,7 +504,13 @@ class _ProductDetailViewState extends State<ProductDetailView> {
                                 child: Icon(Icons.broken_image_outlined, size: 40, color: Color(0xFFD4CECB)))),
                       ),
               ),
-              if (disc > 0)
+              if (seasonalDiscount > 0)
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: _pill('🔥 -$seasonalDiscount% ${seasonalPromoName ?? ''}', const Color(0xFFD2624C)),
+                )
+              else if (disc > 0)
                 Positioned(top: 12, left: 12, child: _pill('-$disc%', const Color(0xFFD2624C))),
               if (urls.length > 1)
                 Positioned(
@@ -530,8 +550,25 @@ class _ProductDetailViewState extends State<ProductDetailView> {
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text((p['category']?['name'] ?? '').toString().toUpperCase(),
-                style: const TextStyle(fontSize: 11, color: _muted, letterSpacing: 1)),
+            Row(children: [
+              Text((p['category']?['name'] ?? '').toString().toUpperCase(),
+                  style: const TextStyle(fontSize: 11, color: _muted, letterSpacing: 1)),
+              if (seasonName != null && seasonName.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFBECE8),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFFF3C7BE)),
+                  ),
+                  child: Text(
+                    '${_seasonEmoji(seasonName)} $seasonName',
+                    style: const TextStyle(fontSize: 10, color: _brand, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ]),
             const SizedBox(height: 4),
             Text(p['name'] as String, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _ink)),
             const SizedBox(height: 6),
@@ -543,14 +580,46 @@ class _ProductDetailViewState extends State<ProductDetailView> {
             ]),
             const SizedBox(height: 10),
             Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('Bs. ${base.toStringAsFixed(0)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _brand)),
-              if (cmp != null) ...[
+              Text('Bs. ${effectivePrice.toStringAsFixed(0)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _brand)),
+              if (effectivePrice < base) ...[
+                const SizedBox(width: 8),
+                Text('Bs. ${base.toStringAsFixed(0)}', style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFFA99C98), fontSize: 14)),
+                const SizedBox(width: 6),
+                Text('-$seasonalDiscount%', style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.bold, fontSize: 13)),
+              ] else if (cmp != null) ...[
                 const SizedBox(width: 8),
                 Text('Bs. ${cmp.toStringAsFixed(0)}', style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFFA99C98))),
                 const SizedBox(width: 6),
                 Text('-$disc%', style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.bold, fontSize: 13)),
               ],
             ]),
+            if (seasonalPromoName != null && seasonalDiscount > 0) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFFB74D)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.local_fire_department, color: Color(0xFFE65100), size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                        seasonalPromoName,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFFBF360C)),
+                      ),
+                      Text(
+                        'Descuento de temporada (-$seasonalDiscount%) aplicado automáticamente al precio.',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFFD84315)),
+                      ),
+                    ]),
+                  ),
+                ]),
+              ),
+            ],
             const SizedBox(height: 16),
 
             // Color
@@ -836,6 +905,15 @@ class _ProductDetailViewState extends State<ProductDetailView> {
         decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
         child: Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
       );
+
+  String _seasonEmoji(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('primavera')) return '🌸';
+    if (n.contains('verano')) return '☀️';
+    if (n.contains('otoño') || n.contains('otono')) return '🍂';
+    if (n.contains('invierno')) return '❄️';
+    return '✨';
+  }
 
   Color _hex(String? h) {
     if (h == null || h.length < 7) return const Color(0xFFCCCCCC);

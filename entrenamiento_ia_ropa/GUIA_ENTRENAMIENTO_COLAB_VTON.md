@@ -1,3 +1,5 @@
+> **DOCUMENTO HISTORICO:** describe un prototipo anterior y no constituye el flujo aprobado de entrenamiento. Empieza por `00_LEEME_PRIMERO.md` y `PLAN_MAESTRO_ENTRENAMIENTO_VTON_V4.md`.
+
 # 👗 Guía Completa de Entrenamiento y Ejecución del Vestidor Virtual (VTON) en Google Colab
 
 Este documento contiene la especificación técnica rigurosa de todos los modelos de Inteligencia Artificial, visión por computador, librerías, dependencias y el código Python listo para ejecutar celda por celda en **Google Colab con GPU (T4 / A100)**.

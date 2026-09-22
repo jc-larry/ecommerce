@@ -40,6 +40,10 @@ export interface Product {
   rating_count: number;
   category_id: number;
   season_id?: number | null;
+  season?: any;
+  seasonal_discount_percent?: number;
+  seasonal_promotion_name?: string | null;
+  effective_price?: number | null;
   is_active: boolean;
   material?: string | null;
   neck_type?: string | null;
@@ -441,11 +445,13 @@ export interface SeasonalPromotion {
   description?: string | null;
   discount_percent: number;
   category_id?: number | null;
+  season_id?: number | null;
   start_date: string;
   end_date: string;
   is_active: boolean;
   created_at: string;
   category?: Category;
+  season?: any;
 }
 
 // ---------- Interfaces de CU14+ ----------

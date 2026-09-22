@@ -30,6 +30,7 @@ from app.packages.paquete_inteligente_y_analitica.models import (
     ChatbotConversation, VirtualTryonCapture, VirtualTryonSession, VirtualTryonItem
 )
 from app.packages.paquete_inteligente_y_analitica.vton_service import VirtualTryonAIService
+from app.packages.paquete_inteligente_y_analitica.garment_rig import build_rig as build_garment_rig
 from app.packages.paquete_inteligente_y_analitica.schemas import (
     VirtualTryonRequest,
     VirtualTryonResponse,
@@ -73,6 +74,8 @@ def remove_background(
     data: RemoveBackgroundRequest,
 ):
     """[CU32] Segmenta la figura humana y reemplaza el fondo por blanco puro (#FFFFFF).
+    # [CU32 - Paso 2] / [DSC032 - Paso 2] +remove_background(image_base64)
+    # [CU32 - Paso 3] / [DSC032 - Paso 3] +segment_human_silhouette_rembg()
 
     Utiliza la red neuronal rembg (u2net/isnet) para detección precisa del contorno
     corporal. Funciona con cualquier fondo arbitrario (alfombra roja, habitación, etc.).
@@ -210,12 +213,60 @@ def get_session_tested_items(
     return results
 
 
+@router.get("/tryon/garment-rig/{product_id}")
+def get_garment_rig(
+    product_id: int,
+    image_url: Optional[str] = Query(
+        None,
+        description="Foto concreta a medir (variante de color). Si se omite, la principal.",
+    ),
+    force: bool = Query(False, description="Ignora la caché y vuelve a medir la prenda."),
+    db: Session = Depends(get_db),
+):
+    """[CU32] Rig de la prenda para el probador en vivo (cámara encendida).
+
+    El probador en vivo deforma la prenda sobre el cuerpo en cada fotograma, así que no
+    puede llamar al servidor por frame. Este endpoint hace, una sola vez y con caché en
+    disco, la parte cara: recorta la prenda del fondo con rembg y **mide** dónde están su
+    hombro, su cintura, su bajo y sus mangas. El cliente descarga el PNG recortado y las
+    medidas, y a partir de ahí trabaja solo y sin red.
+    """
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
+
+    source = image_url
+    if not source:
+        images = list(product.images or [])
+        primary = next((i for i in images if i.is_primary), images[0] if images else None)
+        source = primary.image_url if primary else None
+    if not source:
+        raise HTTPException(status_code=404, detail="La prenda no tiene fotografía que medir.")
+
+    rig = build_garment_rig(
+        product_id=product.id,
+        image_source=source,
+        category_name=product.category.name if product.category else "",
+        product_name=product.name or "",
+        sleeve_length=product.sleeve_length or "",
+        force=force,
+    )
+    if rig is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No se pudo medir la prenda a partir de su fotografía.",
+        )
+    return rig
+
+
 @router.post("/tryon/generate-vton", response_model=VTONGenerateResponse)
 def generate_vton_with_ai(
     data: VTONGenerateRequest,
     db: Session = Depends(get_db),
 ):
     """[CU32] Genera la prueba fotorrealista textil utilizando modelos generativos (IDM-VTON / Fashn.ai)."""
+    # [CU32 - Paso 4] / [DSC032 - Paso 4] +generate_vton(person_image, garment_image, model_choice)
+    # [CU32 - Paso 5] / [DSC032 - Paso 5] +cascade_vton_inference(FASHN -> IDM_VTON -> local_anatomico)
     product = db.query(Product).filter(Product.id == data.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -297,6 +348,8 @@ def simulate_virtual_tryon(
     db: Session = Depends(get_db),
 ):
     """[CU32] Simula la prueba de prenda en el vestidor virtual y recomienda talla según biometría."""
+    # [CU32 - Paso 3] / [DSC032 - Paso 3] +simulate_measurements(chest, waist, hips, height, weight)
+    # [CU32 - Paso 4] / [DSC032 - Paso 4] +calculate_recommended_size_and_fit_feedback()
     product = db.query(Product).filter(Product.id == data.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -490,12 +543,64 @@ def save_tryon_capture(
 # CU33: CHATBOT ASISTENTE & ESTILISTA IA
 # ===================================================================
 
+# ===================================================================
+# CU33: CHATBOT ASISTENTE & ESTILISTA IA
+# ===================================================================
+
+_GARMENT_STEMS = {
+    "blusa": ["blusa", "blusas", "peplum", "camisola"],
+    "vestido": ["vestido", "vestidos", "maxi", "midi"],
+    "pantalon": ["pantalon", "pantalones", "pantalón", "jean", "jeans", "denim"],
+    "falda": ["falda", "faldas"],
+    "short": ["short", "shorts", "bermuda", "bermudas"],
+    "top": ["top", "tops", "crop", "bustier", "corset"],
+    "camisa": ["camisa", "camisas", "camiseta", "camisetas", "remera", "remeras", "polera", "poleras"],
+    "chaqueta": ["chaqueta", "chaquetas", "blazer", "blazers", "abrigo", "abrigos", "bomber", "cardigan", "saco"],
+    "lenceria": ["lenceria", "lencería", "pijama", "pijamas", "saten", "satén", "dormir", "íntima", "intima"],
+    "deportiva": ["deportiva", "deportivo", "legging", "leggings", "activewear", "gym", "fitness"],
+    "bano": ["bikini", "bikinis", "playa", "baño", "bano", "traje de baño"],
+}
+
+_COLOR_STEMS = {
+    "blanco": ["blanco", "blanca", "blancos", "blancas"],
+    "negro": ["negro", "negra", "negros", "negras"],
+    "rojo": ["rojo", "roja", "rojos", "rojas"],
+    "azul": ["azul", "azules", "celeste", "celestes"],
+    "verde": ["verde", "verdes"],
+    "amarillo": ["amarillo", "amarilla", "amarillos", "amarillas"],
+    "rosa": ["rosa", "rosado", "rosada", "rosados", "rosadas"],
+    "beige": ["beige", "camel", "arena"],
+    "marron": ["marron", "marrón", "marrones", "cafe", "café", "chocolate"],
+    "gris": ["gris", "grises"],
+    "dorado": ["dorado", "dorada", "dorados", "doradas"],
+}
+
+_STOP_WORDS = {
+    "hola", "buen", "dia", "dias", "buenas", "tardes", "noches", "por", "favor",
+    "tienen", "tiene", "quiero", "quisiera", "busco", "buscar", "mostrar", "muestrame",
+    "muéstrame", "ensename", "enséñame", "que", "qué", "para", "como", "cómo", "esta",
+    "estan", "están", "unos", "unas", "sobre", "algun", "alguna", "algunas", "algunos",
+    "algo", "tienda", "catalogo", "catálogo", "prenda", "prendas", "ropa"
+}
+
+def _resolve_primary_product_image(p: Product) -> str:
+    if p.images:
+        for img in p.images:
+            if getattr(img, "is_primary", False) and img.image_url:
+                return img.image_url
+        if p.images[0].image_url:
+            return p.images[0].image_url
+    return "/uploads/products/blusa_peplum_blanca.png"
+
+
 @router.post("/chatbot/message", response_model=ChatbotMessageResponse)
 def handle_chatbot_message(
     data: ChatbotMessageRequest,
     db: Session = Depends(get_db),
 ):
     """[CU33] Motor conversacional del Asistente Virtual / Estilista IA con recomendaciones dinámicas."""
+    # [CU33 - Paso 2] / [DSC033 - Paso 2] +handle_chatbot_message(message, session_token)
+    # [CU33 - Paso 3] / [DSC033 - Paso 3] +classify_intent_and_extract_entities()
     msg = data.message.lower().strip()
     session_tok = data.session_token or uuid.uuid4().hex
 
@@ -504,29 +609,29 @@ def handle_chatbot_message(
     suggested_products = []
     actions = []
 
-    # 1. Detección de intenciones
-    if any(k in msg for k in ["hola", "buen dia", "buenas", "que tal", "inicio"]):
+    # 1. Detección de intenciones conversacionales y de atención al cliente
+    if any(k in msg for k in ["hola", "buen dia", "buenas", "que tal", "inicio", "saludos"]):
         intent = "GREETING"
         reply = (
-            "¡Hola! 👋 Soy tu Asistente Virtual y Estilista de FashionStore. "
-            "Puedo ayudarte a buscar prendas, consultar sucursales, verificar el estado de tu pedido o recomendarte combinaciones para tu outfit. ¿Qué buscas hoy?"
+            "¡Hola! 👋 Soy tu Asistente Virtual y Estilista de FashionStore 👗✨. "
+            "Puedo ayudarte a encontrar prendas perfectas, recomendarte combinaciones, verificar disponibilidad, "
+            "consultar sucursales o rastrear tu pedido. ¿Qué prenda o estilo buscas hoy?"
         )
-        actions = ["Ver vestidos de fiesta", "Rastrear mi pedido", "Horarios de sucursales", "Reservar probador"]
+        actions = ["Ver blusas", "Ver vestidos de fiesta", "Rastrear mi pedido", "Horarios de sucursales"]
 
-    elif any(k in msg for k in ["sucursal", "horario", "ubicacion", "donde estan", "direccion", "tienda"]):
+    elif any(k in msg for k in ["sucursal", "horario", "ubicacion", "ubicación", "donde estan", "dónde están", "direccion", "dirección"]):
         intent = "STORE_INFO"
-        branches = db.query(Branch).filter(Branch.is_active == True).limit(3).all()
+        branches = db.query(Branch).filter(Branch.is_active == True).limit(4).all()
         branch_lines = [f"• {b.name}: {b.address} ({b.city})" for b in branches]
         reply = (
             f"Contamos con sucursales activas preparadas para atenderte:\n" +
             "\n".join(branch_lines) +
-            "\n¡Puedes agendar una reserva de probador para tener tus prendas listas!"
+            "\n\n¡Puedes agendar una reserva de probador desde la app para tener tus prendas listas al llegar!"
         )
-        actions = ["Agendar probador", "Ver catálogo"]
+        actions = ["Reservar probador", "Ver catálogo", "Hablar con asesor"]
 
-    elif any(k in msg for k in ["rastrear", "tracking", "donde esta mi", "envio", "despacho"]):
+    elif any(k in msg for k in ["rastrear", "tracking", "donde esta mi", "dónde está mi", "mi paquete", "despacho", "estado de mi pedido"]):
         intent = "ORDER_TRACKING"
-        # Buscar código TRK en el mensaje
         trk_match = re.search(r"TRK-[A-Z0-9]{6,8}", data.message.upper())
         if trk_match:
             code = trk_match.group(0)
@@ -540,12 +645,12 @@ def handle_chatbot_message(
                 reply = f"No encontré despachos con el código {code}. Por favor verifica el número de guía."
         else:
             reply = (
-                "Para rastrear tu pedido, indícame tu código de seguimiento (ejemplo: TRK-A1B2C3D4) "
-                "o consúltalo en el menú de Envíos."
+                "Para rastrear tu pedido en tiempo real, indícame tu código de seguimiento (ejemplo: TRK-A1B2C3D4) "
+                "o consúltalo en el menú de Envíos de la tienda."
             )
             actions = ["Consultar Envíos", "Hablar con un asesor"]
 
-    elif any(k in msg for k in ["reserva", "probador", "cita", "apartar"]):
+    elif any(k in msg for k in ["reserva", "probador", "cita", "apartar", "separar prenda"]):
         intent = "RESERVATION"
         reply = (
             "¡Puedes reservar hasta 5 prendas para probártelas en cualquiera de nuestras sucursales! "
@@ -553,64 +658,189 @@ def handle_chatbot_message(
         )
         actions = ["Ir a Reservas", "Explorar catálogo"]
 
-    elif any(k in msg for k in ["elegante", "boda", "fiesta", "gala", "graduacion", "noche"]):
-        intent = "STYLE_RECOMMENDATION"
+    elif any(k in msg for k in ["talla", "tallas", "medida", "medidas", "que talla", "qué talla"]):
+        intent = "SIZE_ADVICE"
         reply = (
-            "Para ocasiones de gala y eventos especiales, te sugiero prendas elegantes de corte formal. "
-            "Aquí tienes algunas de nuestras piezas destacadas:"
+            "En FashionStore manejamos tallas desde XS hasta XL (y numéricas de 36 a 44). "
+            "En la ficha de cada prenda encontrarás la guía de medidas detallada, y puedes usar nuestro "
+            "Vestidor Virtual con Inteligencia Artificial para obtener una recomendación biométrica personalizada."
         )
-        prods = (
-            db.query(Product)
-            .filter(Product.is_active == True)
-            .order_by(Product.base_price.desc())
-            .limit(3)
-            .all()
+        actions = ["Probar en Vestidor Virtual", "Ver catálogo"]
+
+    elif any(k in msg for k in ["delivery", "envio", "envío", "costo de envio", "costo de envío", "cuanto tarda", "cuánto tarda"]):
+        intent = "SHIPPING_INFO"
+        reply = (
+            "Contamos con nuestras 2 exclusivas sucursales en Santa Cruz (Equipetrol y Ventura Mall) y realizamos envíos a domicilio en toda la ciudad y el país. "
+            "El plazo de entrega en zona urbana es de 24 a 48 horas con número de seguimiento en vivo."
         )
+        actions = ["Ver tarifas de envío", "Ver catálogo"]
+
+    elif any(k in msg for k in ["pago", "pagos", "metodo de pago", "método de pago", "tarjeta", "qr", "paypal", "efectivo"]):
+        intent = "PAYMENT_INFO"
+        reply = (
+            "Aceptamos pagos 100% seguros mediante:\n"
+            "• Código QR Simple (Transferencia bancaria instantánea)\n"
+            "• Tarjetas de Débito y Crédito (Visa / Mastercard)\n"
+            "• PayPal en moneda internacional\n"
+            "• Efectivo en caja si retiras en sucursal."
+        )
+        actions = ["Ver catálogo", "Consultar promociones"]
+
+    elif any(k in msg for k in ["cambio", "cambios", "devolucion", "devolución", "garantia", "garantía"]):
+        intent = "RETURNS_INFO"
+        reply = (
+            "Cuentas con hasta 30 días calendario para solicitar cambio o devolución en cualquiera de nuestras sucursales "
+            "o mediante retiro a domicilio, presentando tu comprobante y la prenda con sus etiquetas originales."
+        )
+        actions = ["Ver sucursales", "Contactar soporte"]
+
+    elif any(k in msg for k in ["cupon", "cupón", "descuento", "descuentos", "promocion", "promoción", "rebaja", "oferta"]):
+        intent = "PROMOTIONS_INFO"
+        reply = (
+            "¡Aprovecha nuestras promociones vigentes! 🎉\n"
+            "Usa el cupón **BIENVENIDA10** al pagar para obtener un 10% de descuento en tu compra, "
+            "o explora nuestras prendas con precios especiales de temporada."
+        )
+        prods = db.query(Product).filter(Product.is_active == True).order_by(Product.discount_percent.desc(), Product.id.asc()).limit(3).all()
         for p in prods:
-            img = p.images[0].image_url if p.images else None
             suggested_products.append({
                 "id": p.id,
                 "name": p.name,
                 "price": float(p.base_price),
-                "image_url": img,
+                "image_url": _resolve_primary_product_image(p),
             })
-        actions = ["Probar en Vestidor Virtual", "Ver más opciones"]
+        actions = ["Ver ofertas del catálogo", "Vestidor Virtual"]
+
+    elif any(k in msg for k in ["elegante", "boda", "fiesta", "gala", "graduacion", "graduación", "noche"]):
+        intent = "STYLE_RECOMMENDATION"
+        reply = (
+            "Para ocasiones de gala y eventos especiales, te sugiero prendas elegantes de corte formal y telas sofisticadas. "
+            "Aquí tienes algunas de nuestras piezas destacadas para deslumbrar:"
+        )
+        prods = (
+            db.query(Product)
+            .filter(
+                Product.is_active == True,
+                or_(
+                    Product.tags.ilike("%elegante%"),
+                    Product.tags.ilike("%fiesta%"),
+                    Product.description.ilike("%elegante%"),
+                    Product.name.ilike("%blazer%"),
+                    Product.name.ilike("%vestido%"),
+                )
+            )
+            .order_by(Product.base_price.desc())
+            .limit(3)
+            .all()
+        )
+        if not prods:
+            prods = db.query(Product).filter(Product.is_active == True).order_by(Product.base_price.desc()).limit(3).all()
+        for p in prods:
+            suggested_products.append({
+                "id": p.id,
+                "name": p.name,
+                "price": float(p.base_price),
+                "image_url": _resolve_primary_product_image(p),
+            })
+        actions = ["Probar en Vestidor Virtual", "Ver vestidos de fiesta"]
 
     else:
-        # Búsqueda por palabras clave en el catálogo
+        # Búsqueda semántica inteligente en el catálogo con normalización de plurales y raíces
         intent = "CATALOG_SEARCH"
-        words = [w for w in msg.split() if len(w) > 3]
-        search_filter = []
-        for w in words:
-            search_filter.append(Product.name.ilike(f"%{w}%"))
-            search_filter.append(Product.description.ilike(f"%{w}%"))
+        detected_garment = None
+        for canonical, variants in _GARMENT_STEMS.items():
+            if any(v in msg for v in variants):
+                detected_garment = canonical
+                break
+
+        detected_color = None
+        for canonical, variants in _COLOR_STEMS.items():
+            if any(v in msg for v in variants):
+                detected_color = canonical
+                break
+
+        detected_material = None
+        for mat in ["lino", "seda", "algodon", "algodón", "cuero", "encaje", "saten", "satén", "denim"]:
+            if mat in msg:
+                detected_material = mat
+                break
+
+        q = db.query(Product).filter(Product.is_active == True)
+
+        filter_clauses = []
+        if detected_garment:
+            variants = _GARMENT_STEMS[detected_garment]
+            clause = or_(*(
+                [Product.name.ilike(f"%{v}%") for v in variants] +
+                [Product.description.ilike(f"%{v}%") for v in variants] +
+                [Product.tags.ilike(f"%{v}%") for v in variants]
+            ))
+            filter_clauses.append(clause)
+
+        if detected_color:
+            color_variants = _COLOR_STEMS[detected_color]
+            color_clause = or_(*(
+                [Product.name.ilike(f"%{c}%") for c in color_variants] +
+                [Product.description.ilike(f"%{c}%") for c in color_variants] +
+                [Product.tags.ilike(f"%{c}%") for c in color_variants] +
+                [Product.variants.any(ProductVariant.color.has(Color.name.ilike(f"%{detected_color}%")))]
+            ))
+            filter_clauses.append(color_clause)
+
+        if detected_material:
+            mat_clean = detected_material.replace("ó", "o")
+            filter_clauses.append(or_(
+                Product.material.ilike(f"%{mat_clean}%"),
+                Product.description.ilike(f"%{mat_clean}%"),
+                Product.tags.ilike(f"%{mat_clean}%"),
+            ))
+
+        # Si no hubo coincidencia de stem, filtrar palabras significativas
+        if not filter_clauses:
+            tokens = [w for w in re.findall(r"\w+", msg) if len(w) > 2 and w not in _STOP_WORDS]
+            if tokens:
+                for token in tokens:
+                    stem = token[:-1] if (token.endswith("s") or token.endswith("es")) and len(token) > 4 else token
+                    filter_clauses.append(or_(
+                        Product.name.ilike(f"%{stem}%"),
+                        Product.description.ilike(f"%{stem}%"),
+                        Product.tags.ilike(f"%{stem}%"),
+                    ))
 
         matched = []
-        if search_filter:
-            matched = (
-                db.query(Product)
-                .filter(Product.is_active == True, or_(*search_filter))
-                .limit(4)
-                .all()
-            )
+        if filter_clauses:
+            matched = q.filter(*filter_clauses).limit(4).all()
 
-        if matched:
-            reply = f"Encontré {len(matched)} opciones que coinciden con lo que buscas:"
-            for p in matched:
-                img = p.images[0].image_url if p.images else None
-                suggested_products.append({
-                    "id": p.id,
-                    "name": p.name,
-                    "price": float(p.base_price),
-                    "image_url": img,
-                })
-            actions = ["Ver detalles", "Buscar otra prenda"]
-        else:
+        if not matched and detected_garment:
+            # Reintentar solo por prenda
+            matched = db.query(Product).filter(
+                Product.is_active == True,
+                or_(*[Product.name.ilike(f"%{v}%") for v in _GARMENT_STEMS[detected_garment]])
+            ).limit(4).all()
+
+        if not matched:
+            # Fallback elegante a novedades activas para no dejar al cliente con pantalla vacía
+            matched = db.query(Product).filter(Product.is_active == True).order_by(Product.id.asc()).limit(3).all()
             reply = (
-                "Entiendo tu consulta. Puedes explorar nuestras colecciones en el catálogo "
-                "o utilizar el probador virtual con Inteligencia Artificial para ver cómo te queda cualquier prenda."
+                "Aquí tienes algunas de nuestras prendas destacadas de la temporada. "
+                "Puedes seleccionar cualquiera para ver fotos, tallas disponibles o probártela en el vestidor virtual:"
             )
-            actions = ["Ver Catálogo Completo", "Vestidor Virtual"]
+        else:
+            term_desc = f"{detected_garment or 'prendas'}"
+            if detected_color:
+                term_desc += f" en tono {detected_color}"
+            if detected_material:
+                term_desc += f" de {detected_material}"
+            reply = f"Encontré estas hermosas opciones de {term_desc} en nuestra colección:"
+
+        for p in matched:
+            suggested_products.append({
+                "id": p.id,
+                "name": p.name,
+                "price": float(p.base_price),
+                "image_url": _resolve_primary_product_image(p),
+            })
+        actions = ["Ver detalles", "Vestidor Virtual", "Ver vestidos", "Ver blusas"]
 
     # Guardar en base de datos
     db.add(ChatbotConversation(
@@ -647,12 +877,9 @@ def search_catalog_voice_nlp(
     db: Session = Depends(get_db),
 ):
     """[CU34] Extrae entidades semánticas (prenda, color, precio, género) del texto transcrito por voz."""
+    # [CU34 - Paso 2] / [DSC034 - Paso 2] +search_catalog_voice_nlp(transcription)
+    # [CU34 - Paso 3] / [DSC034 - Paso 3] +extract_voice_facets(garment, color, gender, max_price)
     query = data.query_text.lower().strip()
-
-    # Diccionarios de entidades
-    colors_known = ["rojo", "azul", "negro", "blanco", "verde", "amarillo", "rosa", "beige", "marron", "gris"]
-    garments_known = ["vestido", "camisa", "pantalon", "chaqueta", "falda", "polera", "short", "blusa", "abrigo"]
-    genders_known = {"mujer": "Damas", "hombre": "Caballeros", "dama": "Damas", "caballero": "Caballeros", "niño": "Niños"}
 
     extracted = {
         "color": None,
@@ -661,47 +888,83 @@ def search_catalog_voice_nlp(
         "max_price": None,
     }
 
-    for c in colors_known:
-        if c in query:
-            extracted["color"] = c
+    # 1. Extracción de color con soporte de variaciones de género y plurales
+    for canonical, variants in _COLOR_STEMS.items():
+        if any(v in query for v in variants):
+            extracted["color"] = canonical
             break
 
-    for g in garments_known:
-        if g in query:
-            extracted["garment"] = g
+    # 2. Extracción de tipo de prenda con soporte de singular y plural
+    for canonical, variants in _GARMENT_STEMS.items():
+        if any(v in query for v in variants):
+            extracted["garment"] = canonical
             break
 
+    # 3. Extracción de género
+    genders_known = {
+        "mujer": "Damas", "damas": "Damas", "femenina": "Damas", "dama": "Damas", "chica": "Damas",
+        "hombre": "Caballeros", "caballero": "Caballeros", "varon": "Caballeros", "masculino": "Caballeros",
+        "niño": "Niños", "niña": "Niños", "infantil": "Niños"
+    }
     for gen_k, gen_v in genders_known.items():
         if gen_k in query:
             extracted["gender"] = gen_v
             break
 
-    # Extracción de precio (ej. "menos de 200", "hasta 150")
-    price_match = re.search(r"(?:menos de|hasta|maximo)\s*(\d+)", query)
+    # 4. Extracción de precio flexible ("menos de 200", "hasta 150", "de 180", "menor a 250", "maximo 300")
+    price_match = re.search(r"(?:menos de|hasta|maximo|máximo|menor a|menor de|debajo de|de|por)\s*(\d+)", query)
     if price_match:
         extracted["max_price"] = float(price_match.group(1))
 
-    # Consulta dinámica
+    # 5. Consulta dinámica en base de datos
     q = db.query(Product).filter(Product.is_active == True)
+
     if extracted["garment"]:
-        q = q.filter(or_(
-            Product.name.ilike(f"%{extracted['garment']}%"),
-            Product.description.ilike(f"%{extracted['garment']}%"),
-        ))
+        variants = _GARMENT_STEMS[extracted["garment"]]
+        q = q.filter(or_(*(
+            [Product.name.ilike(f"%{v}%") for v in variants] +
+            [Product.description.ilike(f"%{v}%") for v in variants] +
+            [Product.tags.ilike(f"%{v}%") for v in variants]
+        )))
+
+    if extracted["color"]:
+        color_variants = _COLOR_STEMS[extracted["color"]]
+        q = q.filter(or_(*(
+            [Product.name.ilike(f"%{c}%") for c in color_variants] +
+            [Product.description.ilike(f"%{c}%") for c in color_variants] +
+            [Product.tags.ilike(f"%{c}%") for c in color_variants] +
+            [Product.variants.any(ProductVariant.color.has(Color.name.ilike(f"%{extracted['color']}%")))]
+        )))
+
     if extracted["max_price"]:
         q = q.filter(Product.base_price <= extracted["max_price"])
 
+    # Si se dijo "barato" o "económico", ordenar por precio ascendente
+    if any(b in query for b in ["barato", "barata", "baratos", "baratas", "economico", "económico"]):
+        q = q.order_by(Product.base_price.asc())
+
     products_matched = q.limit(10).all()
 
-    # Si se buscó un color, verificar variantes
+    # Si no hubo coincidencia estricta de entidades, búsqueda de texto general con las palabras dichas
+    if not products_matched:
+        tokens = [w for w in re.findall(r"\w+", query) if len(w) > 2 and w not in _STOP_WORDS]
+        if tokens:
+            general_filters = []
+            for t in tokens:
+                general_filters.append(or_(
+                    Product.name.ilike(f"%{t}%"),
+                    Product.description.ilike(f"%{t}%"),
+                    Product.tags.ilike(f"%{t}%"),
+                ))
+            products_matched = db.query(Product).filter(Product.is_active == True, or_(*general_filters)).limit(8).all()
+
     results = []
     for p in products_matched:
-        img = p.images[0].image_url if p.images else None
         results.append({
             "id": p.id,
             "name": p.name,
             "base_price": float(p.base_price),
-            "image_url": img,
+            "image_url": _resolve_primary_product_image(p),
             "category_name": p.category.name if p.category else "General",
         })
 
@@ -798,6 +1061,8 @@ def get_top_selling_products(
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Reporte de prendas más vendidas por volumen de unidades y facturación total."""
+    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_top_selling_products(limit)
+    # [CU35 - Paso 3] / [DSC035 - Paso 3] +aggregate_sales_by_product_volume_and_revenue()
     results = (
         db.query(
             ProductVariant.product_id,
@@ -839,6 +1104,8 @@ def get_executive_summary_voice(
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Genera un resumen ejecutivo de ventas y operaciones optimizado para síntesis de voz (TTS)."""
+    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_executive_summary_voice()
+    # [CU35 - Paso 3] / [DSC035 - Paso 3] +consolidate_sales_kpis_and_inventory()
     total_revenue = db.query(func.sum(Order.total_amount)).filter(Order.status == "PAGADA").scalar() or 0.0
     total_orders = db.query(func.count(Order.id)).filter(Order.status == "PAGADA").scalar() or 0
     active_reservations = db.query(func.count(Reservation.id)).filter(Reservation.status.in_(["PENDING", "PREPARING", "READY"])).scalar() or 0
@@ -868,6 +1135,8 @@ def get_product_sales_trend(
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Análisis histórico de demanda y ventas por prenda para decidir pedidos y reposición de stock."""
+    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_product_sales_trend(product_id, months)
+    # [CU35 - Paso 3] / [DSC035 - Paso 3] +compute_sales_velocity_and_stock_coverage()
     prod = db.query(Product).filter(Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -1055,6 +1324,8 @@ def get_analytics_dashboard(
     current_user: User = Depends(get_current_user),
 ):
     """[CU39] Métricas globales en tiempo real y KPIs para el panel de control directivo."""
+    # [CU39 - Paso 2] / [DSC039 - Paso 2] +get_analytics_dashboard()
+    # [CU39 - Paso 3] / [DSC039 - Paso 3] +compute_multichannel_sales_and_inventory_kpis()
     # 1. Total ventas
     revenue_sum = db.query(func.sum(Order.total_amount)).filter(Order.status == "PAGADA").scalar() or 0.0
     orders_cnt = db.query(func.count(Order.id)).filter(Order.status == "PAGADA").scalar() or 0

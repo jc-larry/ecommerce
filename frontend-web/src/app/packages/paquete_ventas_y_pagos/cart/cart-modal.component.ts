@@ -1,4 +1,4 @@
-import { Component, OnInit, Output, EventEmitter, Input } from '@angular/core';
+import { Component, OnInit, OnChanges, SimpleChanges, Output, EventEmitter, Input } from '@angular/core';
 import { Router } from '@angular/router';
 import { VentasService, CartResponse, CartItem, OrderResponse } from '../ventas.service';
 import { CatalogoService } from '../../paquete_catalogo_y_tiendas/catalogo.service';
@@ -10,7 +10,7 @@ import { PayPalCheckoutService, PayPalCaptureResult } from '../paypal-checkout.s
   templateUrl: './cart-modal.component.html',
   styleUrls: ['./cart-modal.component.css']
 })
-export class CartModalComponent implements OnInit {
+export class CartModalComponent implements OnInit, OnChanges {
   @Input() isOpen: boolean = false;
   @Output() close = new EventEmitter<void>();
 
@@ -38,21 +38,16 @@ export class CartModalComponent implements OnInit {
   // Datos PayPal y Simulador Sandbox
   paypalOrderId: string = '';
   showPayPalSimulator: boolean = false;
-  paypalSimulatorStep: 'REVIEW' | 'PROCESSING' | 'SUCCESS' = 'REVIEW';
   /** URL de aprobación real de PayPal (null en modo simulación sin credenciales sandbox). */
   paypalApproveUrl: string | null = null;
   paypalSimulated = true;
   paypalError = '';
-  paypalFundingSource: 'BALANCE' | 'CARD' = 'BALANCE';
-  paypalPayerEmail: string = 'comprador.sandbox@fashionstore.com';
-  paypalPayerName: string = 'Cliente Moda Sandbox';
+  paypalPayerEmail: string = '';
   paypalPayerId: string = '';
   /** true mientras se cargan los botones oficiales de PayPal (modo conectado). */
   paypalButtonsLoading = false;
   paypalTransactionId: string = '';
   paypalApproved: boolean = false;
-  paypalProcessing: boolean = false;
-  paypalAuthTime: string = '';
   readonly exchangeRateUsd: number = 6.96;
 
   get cartTotalUsd(): number {
@@ -78,6 +73,16 @@ export class CartModalComponent implements OnInit {
       this.loadCart();
     }
     this.loadBranches();
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // Cada vez que el modal se abre (isOpen pasa de false a true),
+    // recargar el carrito desde el backend para reflejar los items recién agregados.
+    if (changes['isOpen'] && changes['isOpen'].currentValue === true) {
+      if (this.auth.isLoggedIn()) {
+        this.loadCart();
+      }
+    }
   }
 
   loadCart(): void {
@@ -158,24 +163,17 @@ export class CartModalComponent implements OnInit {
     this.errorMessage = null;
   }
 
+  /** Abre PayPal: el simulador (por defecto) o los botones oficiales si el backend tiene PayPal real. */
   openPayPalSimulator(): void {
     if (!this.cart || this.cart.items.length === 0) return;
-    this.paypalSimulatorStep = 'REVIEW';
-    this.paypalProcessing = false;
     this.paypalError = '';
     this.showPayPalSimulator = true;
-
-    // Con credenciales en el backend se usa PayPal real (sandbox); sin ellas, el simulador.
     this.paypalCheckout.getConfig().subscribe({
       next: (config) => {
         this.paypalSimulated = config.simulated;
-        if (config.simulated) {
-          this.createSimulatedPayPalOrder();
-        } else {
-          this.renderRealPayPalButtons();
-        }
+        if (!config.simulated) this.renderRealPayPalButtons();
       },
-      error: () => (this.paypalError = 'No se pudo obtener la configuración de PayPal.')
+      error: () => (this.paypalSimulated = true)
     });
   }
 
@@ -183,7 +181,6 @@ export class CartModalComponent implements OnInit {
   private renderRealPayPalButtons(): void {
     if (!this.cart) return;
     const amountBob = this.cart.subtotal;
-    const description = `Compra Online FashionStore (${this.cart.items_count} prendas)`;
     this.paypalButtonsLoading = true;
     // Espera a que Angular pinte el contenedor del modal.
     setTimeout(() => {
@@ -191,12 +188,9 @@ export class CartModalComponent implements OnInit {
       if (!container) return;
       this.paypalCheckout.renderButtons(container, {
         amountBob,
-        description,
+        description: this.paypalDescription,
         onApproved: (capture) => this.onPayPalCaptured(capture),
-        onError: (msg) => {
-          this.paypalSimulatorStep = 'REVIEW';
-          this.paypalError = msg;
-        },
+        onError: (msg) => (this.paypalError = msg),
         onCancel: () => (this.paypalError = 'Cancelaste el pago en PayPal. No se realizó ningún cobro.')
       })
         .catch((e: Error) => (this.paypalError = e.message))
@@ -204,60 +198,28 @@ export class CartModalComponent implements OnInit {
     });
   }
 
-  private createSimulatedPayPalOrder(): void {
-    if (!this.cart || this.paypalOrderId) return;
-    this.ventasService.createPayPalOrder(
-      this.cart.subtotal,
-      `Compra Online FashionStore (${this.cart.items_count} prendas)`
-    ).subscribe({
-      next: (order) => {
-        this.paypalOrderId = order.id;
-        this.paypalSimulated = !!order.simulated;
-      },
-      error: (e) => {
-        this.paypalOrderId = '';
-        this.paypalError = e?.error?.detail || 'No se pudo iniciar el pago con PayPal.';
-      }
-    });
+  get paypalDescription(): string {
+    return `Compra Online FashionStore (${this.cart?.items_count || 0} prendas)`;
   }
 
-  /** Pago capturado por PayPal (real o simulado): guarda el comprobante para el checkout. */
-  private onPayPalCaptured(res: PayPalCaptureResult): void {
+  /** Cambia de los botones reales de PayPal al simulador. */
+  enableSimulator(): void {
+    this.paypalError = '';
+    this.paypalSimulated = true;
+  }
+
+  /**
+   * Pago capturado por PayPal (real o simulado): guarda el comprobante y registra el pedido
+   * de inmediato, así el pedido queda como pagado sin pasos extra.
+   */
+  onPayPalCaptured(res: PayPalCaptureResult): void {
     this.paypalOrderId = res.id;
     this.paypalApproved = true;
-    this.paypalProcessing = false;
     this.paypalTransactionId = res.gateway_reference || `PAYPAL:${res.capture_id || res.id}`;
     this.paypalPayerId = res.payer?.payer_id || '';
     if (res.payer?.email_address) this.paypalPayerEmail = res.payer.email_address;
-    const name = [res.payer?.name?.given_name, res.payer?.name?.surname].filter(Boolean).join(' ');
-    if (name) this.paypalPayerName = name;
-    this.paypalAuthTime = new Date().toLocaleString('es-BO', { timeZone: 'America/La_Paz' });
-    this.paypalSimulatorStep = 'SUCCESS';
-  }
-
-  executePayPalSimulation(): void {
-    this.paypalSimulatorStep = 'PROCESSING';
-    this.paypalProcessing = true;
-
-    if (!this.paypalOrderId) {
-      this.paypalSimulatorStep = 'REVIEW';
-      this.paypalProcessing = false;
-      this.paypalError = this.paypalError || 'La orden de PayPal aún no está lista. Intenta nuevamente.';
-      return;
-    }
-    const orderIdToCapture = this.paypalOrderId;
-
-    setTimeout(() => {
-      this.ventasService.capturePayPalOrder(orderIdToCapture).subscribe({
-        next: (res) => this.onPayPalCaptured(res),
-        error: (e) => {
-          this.paypalApproved = false;
-          this.paypalProcessing = false;
-          this.paypalSimulatorStep = 'REVIEW';
-          this.paypalError = e?.error?.detail || 'PayPal no confirmó el pago. No se realizó ningún cobro.';
-        }
-      });
-    }, 1400);
+    this.closePayPalSimulator();
+    if (this.currentStep === 'CHECKOUT') this.submitOrder();
   }
 
   closePayPalSimulator(): void {
@@ -271,7 +233,6 @@ export class CartModalComponent implements OnInit {
     this.paypalPayerId = '';
     this.paypalApproveUrl = null;
     this.paypalError = '';
-    this.paypalSimulatorStep = 'REVIEW';
   }
 
   submitOrder(): void {
@@ -320,7 +281,7 @@ export class CartModalComponent implements OnInit {
       payload.paypal_payment = {
         paypal_order_id: this.paypalOrderId,
         paypal_payer_id: this.paypalPayerId || undefined,
-        paypal_payer_email: this.paypalPayerEmail,
+        paypal_payer_email: this.paypalPayerEmail || undefined,
         gateway_reference: this.paypalTransactionId
       };
     } else if (this.paymentType === 'QR') {

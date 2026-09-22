@@ -63,8 +63,22 @@
 
       <!-- Ficha -->
       <div class="col-lg-6">
-        <div class="text-muted small text-uppercase">{{ product.category?.name }}</div>
+        <div class="d-flex align-items-center justify-content-between mb-1">
+          <div class="text-muted small text-uppercase">{{ product.category?.name }}</div>
+          <span class="badge bg-light text-dark border rounded-pill px-2 py-1" *ngIf="product.season?.name">
+            <i class="bi bi-calendar3-range text-primary me-1"></i>{{ product.season?.name }}
+          </span>
+        </div>
         <h1 class="detail-name">{{ product.name }}</h1>
+
+        <!-- Aviso de Descuento de Temporada (CU13) -->
+        <div class="alert alert-warning py-2 px-3 rounded-3 d-flex align-items-center gap-2 my-2" *ngIf="product.seasonal_promotion_name">
+          <i class="bi bi-fire text-danger fs-5"></i>
+          <div class="small">
+            <strong class="text-danger">{{ product.seasonal_promotion_name }}</strong>
+            <span class="text-muted d-block">Descuento de temporada de {{ product.seasonal_discount_percent }}% aplicado al precio final.</span>
+          </div>
+        </div>
 
         <div class="rating-line">
           <span class="stars">
@@ -420,7 +434,4 @@
       </div>
     </div>
   </div>
-
-  <!-- Modal de Carrito y Checkout (CU17, CU18, CU20) -->
-  <app-cart-modal [isOpen]="isCartOpen" (close)="isCartOpen = false"></app-cart-modal>
 </div>

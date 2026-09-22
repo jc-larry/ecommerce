@@ -1,0 +1,166 @@
+<div class="pp-overlay" (click)="cancel()">
+  <div class="pp-window" (click)="$event.stopPropagation()" role="dialog" aria-label="PayPal">
+
+    <!-- Barra superior: logo, entorno y total del carrito -->
+    <header class="pp-header">
+      <button type="button" class="pp-close" (click)="cancel()" aria-label="Cerrar"
+              [disabled]="step === 'PROCESSING' || step === 'DONE'">
+        <i class="bi bi-x-lg"></i>
+      </button>
+      <div class="pp-logo" aria-hidden="true">
+        <span class="pp-logo-p">P</span><span class="pp-logo-pay">Pay</span><span class="pp-logo-pal">Pal</span>
+      </div>
+      <span class="pp-env">Sandbox</span>
+      <div class="pp-cart" *ngIf="amountUsd">
+        <i class="bi bi-cart3"></i>
+        <span>${{ amountUsd | number:'1.2-2' }} USD</span>
+      </div>
+    </header>
+
+    <main class="pp-body">
+
+      <!-- Creando la orden -->
+      <section *ngIf="step === 'CREATING'" class="pp-center">
+        <div class="pp-spinner"></div>
+        <p class="pp-muted">Conectando con PayPal…</p>
+      </section>
+
+      <!-- Error que impide continuar -->
+      <section *ngIf="step === 'FATAL'" class="pp-center">
+        <i class="bi bi-exclamation-circle pp-fatal-icon"></i>
+        <h2 class="pp-title">No se pudo completar el pago</h2>
+        <p class="pp-muted">{{ fatalError }}</p>
+        <button type="button" class="pp-btn pp-btn-primary" (click)="createOrder()">Volver a intentarlo</button>
+        <button type="button" class="pp-link" (click)="cancelled.emit()">Regresar a {{ merchantName }}</button>
+      </section>
+
+      <!-- Paso 1: correo -->
+      <section *ngIf="step === 'EMAIL'">
+        <h1 class="pp-heading">Pagar con PayPal</h1>
+        <p class="pp-sub">Introduzca su correo electrónico para empezar.</p>
+
+        <div class="pp-alert" *ngIf="loginError"><i class="bi bi-exclamation-circle-fill"></i>{{ loginError }}</div>
+
+        <form (ngSubmit)="nextFromEmail()" autocomplete="off">
+          <div class="pp-field" [class.pp-field-error]="loginError">
+            <input id="ppEmail" name="ppEmail" type="email" [(ngModel)]="email" placeholder=" "
+                   autocomplete="off" autocapitalize="none" spellcheck="false">
+            <label for="ppEmail">Correo electrónico o número de celular</label>
+          </div>
+          <button type="button" class="pp-link pp-link-left">¿Olvidó su correo electrónico?</button>
+          <button type="submit" class="pp-btn pp-btn-primary">Siguiente</button>
+        </form>
+
+        <div class="pp-divider"><span>o</span></div>
+        <button type="button" class="pp-btn pp-btn-secondary" disabled title="No disponible en el simulador">
+          Pagar con tarjeta de débito o crédito
+        </button>
+        <button type="button" class="pp-link" (click)="cancel()">Cancelar y regresar a {{ merchantName }}</button>
+      </section>
+
+      <!-- Paso 2: contraseña -->
+      <section *ngIf="step === 'PASSWORD'">
+        <h1 class="pp-heading">Pagar con PayPal</h1>
+        <div class="pp-email-chip">
+          <span>{{ email }}</span>
+          <button type="button" class="pp-link pp-inline" (click)="changeEmail()">Cambiar</button>
+        </div>
+
+        <div class="pp-alert" *ngIf="loginError"><i class="bi bi-exclamation-circle-fill"></i>{{ loginError }}</div>
+
+        <form (ngSubmit)="login()" autocomplete="off">
+          <div class="pp-field" [class.pp-field-error]="loginError">
+            <input id="ppPass" name="ppPass" [type]="showPassword ? 'text' : 'password'" [(ngModel)]="password"
+                   placeholder=" " autocomplete="new-password">
+            <label for="ppPass">Contraseña</label>
+            <button type="button" class="pp-eye" (click)="showPassword = !showPassword"
+                    [attr.aria-label]="showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'">
+              <i class="bi" [class.bi-eye]="!showPassword" [class.bi-eye-slash]="showPassword"></i>
+            </button>
+          </div>
+          <button type="button" class="pp-link pp-link-left">¿Olvidó su contraseña?</button>
+          <button type="submit" class="pp-btn pp-btn-primary" [disabled]="!password || busy">
+            <span *ngIf="busy" class="pp-btn-spinner"></span>
+            <span *ngIf="!busy">Iniciar sesión</span>
+          </button>
+        </form>
+        <button type="button" class="pp-link" (click)="cancel()">Cancelar y regresar a {{ merchantName }}</button>
+      </section>
+
+      <!-- Cargando la cartera -->
+      <section *ngIf="step === 'WALLET'" class="pp-center pp-wallet">
+        <div class="pp-wallet-ring">
+          <span class="pp-hand pp-hand-blue">✋</span>
+        </div>
+        <h2 class="pp-hello">¡Hola, {{ firstName }}!</h2>
+        <p class="pp-hello-sub">Estamos cargando su cartera.</p>
+      </section>
+
+      <!-- Revisión y "Completar compra" -->
+      <section *ngIf="step === 'REVIEW' && account">
+        <div class="pp-review-head">
+          <div class="pp-avatar">{{ firstName.charAt(0) }}</div>
+          <div>
+            <div class="pp-review-name">Hola, {{ firstName }}</div>
+            <div class="pp-muted pp-small">{{ account.payer.email_address }}</div>
+          </div>
+        </div>
+
+        <div class="pp-alert" *ngIf="reviewError"><i class="bi bi-exclamation-circle-fill"></i>{{ reviewError }}</div>
+
+        <div class="pp-block">
+          <div class="pp-block-title">Pagar a</div>
+          <div class="pp-merchant">
+            <span>{{ merchantName }}</span>
+            <strong>${{ amountUsd | number:'1.2-2' }} USD</strong>
+          </div>
+          <div class="pp-muted pp-small">{{ description }} · ≈ Bs. {{ amountBob | number:'1.2-2' }}</div>
+        </div>
+
+        <div class="pp-block">
+          <div class="pp-block-title">Pagar con</div>
+          <label *ngFor="let f of account.funding_sources" class="pp-fund" [class.pp-fund-on]="fundingId === f.id">
+            <input type="radio" name="ppFunding" [value]="f.id" [(ngModel)]="fundingId">
+            <span class="pp-fund-icon">
+              <i class="bi" [class.bi-paypal]="f.id === 'BALANCE'" [class.bi-credit-card-2-front-fill]="f.id !== 'BALANCE'"></i>
+            </span>
+            <span class="pp-fund-text">
+              <span class="pp-fund-label">{{ f.label }}</span>
+              <span class="pp-muted pp-small">{{ f.detail }}</span>
+            </span>
+            <i class="bi bi-check-circle-fill pp-fund-check" *ngIf="fundingId === f.id"></i>
+          </label>
+        </div>
+
+        <button type="button" class="pp-btn pp-btn-primary pp-btn-lg" (click)="completePurchase()" [disabled]="busy">
+          {{ reviewError ? 'Intentar de nuevo' : 'Completar compra' }}
+        </button>
+        <p class="pp-legal">
+          Al pulsar Completar compra, autoriza a {{ merchantName }} a cobrar ${{ amountUsd | number:'1.2-2' }} USD
+          en su cuenta PayPal.
+        </p>
+        <button type="button" class="pp-link" (click)="cancel()">Cancelar y regresar a {{ merchantName }}</button>
+      </section>
+
+      <!-- Procesando -->
+      <section *ngIf="step === 'PROCESSING'" class="pp-center">
+        <div class="pp-spinner"></div>
+        <h2 class="pp-title">Procesando su pago…</h2>
+        <p class="pp-muted">No cierre esta ventana.</p>
+      </section>
+
+      <!-- Pago completado -->
+      <section *ngIf="step === 'DONE'" class="pp-center">
+        <div class="pp-done"><i class="bi bi-check-lg"></i></div>
+        <h2 class="pp-title">Pago completado</h2>
+        <p class="pp-muted">Pagó ${{ amountUsd | number:'1.2-2' }} USD a {{ merchantName }}.</p>
+        <p class="pp-muted pp-small">Regresando a {{ merchantName }}…</p>
+      </section>
+    </main>
+
+    <footer class="pp-footer">
+      <span>Privacidad</span><span>Legal</span><span>Contacto</span>
+      <span class="pp-footer-note">Simulador de pagos · sin cobro real</span>
+    </footer>
+  </div>
+</div>

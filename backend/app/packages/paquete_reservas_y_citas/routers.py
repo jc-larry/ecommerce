@@ -207,12 +207,13 @@ def create_reservation(
     current_user: User = Depends(get_current_user),
 ):
     """[CU26] Agendar reserva física para probador con bloqueo de stock (HOLD 48h máx 5 prendas y seña 50%)."""
+    # [CU26 - Paso 2] / [DSC026 - Paso 2] +create_reservation(branch_id, items, appointment_date, time)
     # 1. Validar sucursal
     branch = db.query(Branch).filter(Branch.id == data.branch_id).first()
     if not branch or not branch.is_active:
         raise HTTPException(status_code=400, detail="Sucursal no válida o inactiva.")
 
-    # 1.1 Validar fecha y hora de cita si fueron provistas
+    # [CU26 - Paso 3] / [DSC026 - Paso 3] +validar_fecha_y_horario_atencion()
     if data.appointment_date:
         today = date.today()
         if data.appointment_date < today:
@@ -371,11 +372,13 @@ def list_reservations(
     current_user: User = Depends(get_current_user),
 ):
     """[CU27] Bandeja de reservas del personal. Encargado y cajero solo ven las de su sucursal."""
+    # [CU27 - Paso 2] / [DSC027 - Paso 2] +list_reservations(branch_id)
     is_staff, own_branch = _staff_branch(current_user, db)
     if not is_staff:
         raise HTTPException(status_code=403, detail="Solo el personal de tienda puede ver la bandeja de reservas.")
     if own_branch is not None:
         branch_id = own_branch
+    # [CU27 - Paso 3] / [DSC027 - Paso 3] +select_reservations_where_branch(branch_id)
     query = db.query(Reservation)
     if branch_id:
         query = query.filter(Reservation.branch_id == branch_id)
@@ -384,6 +387,7 @@ def list_reservations(
 
     # Ordenar por fecha de reserva más próxima
     reservations = query.order_by(Reservation.reserved_at.asc()).all()
+    # [CU27 - Paso 4] / [DSC027 - Paso 4] +Retornar tablero Kanban de reservas
     return [_build_reservation_response(r, db) for r in reservations]
 
 
@@ -406,6 +410,7 @@ def update_reservation_status(
     current_user: User = Depends(get_current_user),
 ):
     """[CU27] Actualiza el estado Kanban de preparación (PENDING, PREPARING, READY, LATE, NO_SHOW, COMPLETED, CANCELLED, EXPIRED)."""
+    # [CU27 - Paso 5] / [DSC027 - Paso 5] +update_reservation_status(reservation_id, new_status)
     reservation = _get_accessible_reservation(reservation_id, current_user, db, staff_only=True)
 
     new_status = data.status.upper()
@@ -419,6 +424,7 @@ def update_reservation_status(
             detail=f"La reserva ya se encuentra en estado '{reservation.status}' y no puede cambiar."
         )
 
+    # [CU27 - Paso 6] / [DSC027 - Paso 6] +update(reservation, status=new_status) y avisar cliente
     # Si se cancela o pasa a NO_SHOW, liberar el stock apartado (la seña no se reembolsa)
     if new_status in ["CANCELLED", "NO_SHOW"] and reservation.status not in ["CANCELLED", "NO_SHOW"]:
         _release_reservation_stock(reservation, db)
@@ -515,6 +521,7 @@ def cancel_reservation(
     """[CU28] Cancelar reserva y liberar inmediatamente el stock apartado (HOLD).
     Regla: Si el cliente cancela, debe ser con más de 24 horas de antelación a la cita.
     """
+    # [CU28 - Paso 2] / [DSC028 - Paso 2] +cancel_reservation(reservation_id)
     reservation = _get_accessible_reservation(reservation_id, current_user, db)
 
     if reservation.status in ["CANCELLED", "COMPLETED"]:
@@ -523,7 +530,7 @@ def cancel_reservation(
             detail=f"No se puede cancelar una reserva en estado '{reservation.status}'."
         )
 
-    # Validar ventana de 24 horas para clientes
+    # [CU28 - Paso 3] / [DSC028 - Paso 3] +validar_ventana_24_horas()
     user_roles = [r.name for r in current_user.roles]
     is_staff = any(r in ["SUPERADMIN", "ADMINISTRADOR", "ENCARGADO", "CAJERO"] for r in user_roles)
     if not is_staff and reservation.reserved_at:
@@ -536,7 +543,9 @@ def cancel_reservation(
                 detail="No es posible cancelar la cita con menos de 24 horas de anticipación. Las prendas ya se encuentran preparadas en probador y se considera venta perdida según política de tienda."
             )
 
+    # [CU28 - Paso 4] / [DSC028 - Paso 4] +_release_reservation_stock(liberar_prendas_al_inventario)
     _release_reservation_stock(reservation, db)
+    # [CU28 - Paso 5] / [DSC028 - Paso 5] +update(reservation, status='CANCELLED') y notificar
     reservation.status = "CANCELLED"
     _avisar_reserva(reservation, db)
     if not is_staff:
@@ -581,6 +590,7 @@ def convert_reservation_to_pos(
     - El saldo se cobra en el turno de caja ABIERTO del cajero, en la sucursal de la reserva,
       para que cuadre en su arqueo de cierre.
     """
+    # [CU25 - Paso 2] / [DSC025 - Paso 2] +convert_reservation_to_pos(reservation_id, cash_shift_id, accepted_items)
     reservation = _get_accessible_reservation(reservation_id, current_user, db, staff_only=True)
 
     if reservation.status in ["CANCELLED", "COMPLETED", "EXPIRED", "NO_SHOW"]:
@@ -597,6 +607,7 @@ def convert_reservation_to_pos(
     if shift.branch_id != reservation.branch_id:
         raise HTTPException(status_code=400, detail="La reserva pertenece a otra sucursal que tu caja abierta.")
 
+    # [CU25 - Paso 3] / [DSC025 - Paso 3] +calcular_saldo_liquidado_restando_sena_50()
     p_method = data.payment_method.upper()
     if p_method not in ("EFECTIVO", "TARJETA", "QR"):
         raise HTTPException(status_code=400, detail="El saldo en caja se cobra en EFECTIVO, TARJETA o QR.")
@@ -642,6 +653,7 @@ def convert_reservation_to_pos(
     balance_to_charge = round(subtotal - deposit_credited, 2)
     total_amount = subtotal
 
+    # [CU25 - Paso 4] / [DSC025 - Paso 4] +insert_order_pos_and_items()
     # 4. Crear cabecera Order POS
     order = Order(
         user_id=reservation.customer_id,
@@ -682,6 +694,7 @@ def convert_reservation_to_pos(
             )
         )
 
+    # [CU25 - Paso 5] / [DSC025 - Paso 5] +insert_payment_saldo_caja()
     # 6. Crear Pago en Caja por el saldo restante (queda ligado al turno vía la orden)
     if p_method == "EFECTIVO":
         received = data.cash_received if data.cash_received is not None else balance_to_charge
@@ -712,6 +725,7 @@ def convert_reservation_to_pos(
         )
     db.add(payment)
 
+    # [CU25 - Paso 6] / [DSC025 - Paso 6] +issue_invoice_IVA13(CU20)
     # 7. Emitir Factura fiscal oficial con IVA 13% sobre el total comprado
     iva_amount = round(total_amount * 0.13, 2)
     control_code = f"{uuid.uuid4().hex[:2].upper()}-{uuid.uuid4().hex[2:4].upper()}-{uuid.uuid4().hex[4:6].upper()}"
@@ -729,6 +743,7 @@ def convert_reservation_to_pos(
     )
     db.add(invoice)
 
+    # [CU25 - Paso 7] / [DSC025 - Paso 7] +update(reservation, status='COMPLETED')
     # 8. Actualizar estado de la reserva
     reservation.status = "COMPLETED"
     reservation.completed_sale_id = order.id

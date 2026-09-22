@@ -220,6 +220,8 @@ def test_cu29_and_cu30_shipments_and_tracking_timeline():
         "carrier_name": "Moto Express SCZ",
         "carrier_phone": "70012345",
         "delivery_address": "Av. San Martín #456, Equipetrol",
+        "delivery_latitude": -17.76940000,
+        "delivery_longitude": -63.19320000,
         "recipient_name": "María Pérez",
         "recipient_phone": "71122334",
         "shipping_cost": 18.0,
@@ -230,6 +232,9 @@ def test_cu29_and_cu30_shipments_and_tracking_timeline():
     tracking_num = ship_data["tracking_number"]
     ship_id = ship_data["id"]
     assert tracking_num.startswith("TRK-")
+    assert ship_data["delivery_latitude"] == -17.7694
+    assert ship_data["delivery_longitude"] == -63.1932
+    assert ship_data["origin_branch_id"] == b_id
     assert len(ship_data["events"]) == 1
 
     # 2. [CU29] Agregar nuevo hito de seguimiento

@@ -44,6 +44,26 @@ class AuthService {
   static String get _baseUrl => '$apiBaseUrl/auth';
   static const Duration _timeout = Duration(seconds: 15);
 
+  static String normalizeApiBaseUrl(String value) {
+    var clean = value.trim();
+    while (clean.endsWith('/')) {
+      clean = clean.substring(0, clean.length - 1);
+    }
+    if (!clean.contains('://')) {
+      clean = 'http://$clean';
+    }
+    final uri = Uri.tryParse(clean);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw const FormatException('Ingresa una IP o URL válida.');
+    }
+    if (!uri.path.endsWith('/api/v1') && !uri.path.contains('/api/')) {
+      clean = '$clean/api/v1';
+    }
+    return clean;
+  }
+
   /// Cargar URL personalizada guardada en preferencias (si existe).
   static Future<void> init() async {
     try {
@@ -58,25 +78,20 @@ class AuthService {
   /// Permite cambiar dinámicamente la IP/URL del backend desde la app sin cables.
   static Future<void> setCustomBaseUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
-    var clean = url.trim();
-    while (clean.endsWith('/')) {
-      clean = clean.substring(0, clean.length - 1);
-    }
-    if (!clean.endsWith('/api/v1') && !clean.contains('/api/')) {
-      clean = '$clean/api/v1';
-    }
+    final clean = normalizeApiBaseUrl(url);
     _customApiBaseUrl = clean;
     await prefs.setString('custom_api_base_url', clean);
   }
 
   /// Probar conectividad con el backend
   static Future<bool> testConnection([String? urlToTest]) async {
-    var target = urlToTest != null && urlToTest.trim().isNotEmpty ? urlToTest.trim() : apiBaseUrl;
-    while (target.endsWith('/')) {
-      target = target.substring(0, target.length - 1);
-    }
-    if (!target.endsWith('/api/v1') && !target.contains('/api/')) {
-      target = '$target/api/v1';
+    String target;
+    try {
+      target = normalizeApiBaseUrl(
+        urlToTest != null && urlToTest.trim().isNotEmpty ? urlToTest : apiBaseUrl,
+      );
+    } on FormatException {
+      return false;
     }
     try {
       final r = await http.get(Uri.parse('$target/branches')).timeout(const Duration(seconds: 4));

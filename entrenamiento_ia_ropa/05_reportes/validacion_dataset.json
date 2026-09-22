@@ -1,0 +1,504 @@
+{
+  "root": "C:\\Users\\MARILYN\\Documents\\Carpeta Esther\\Semestre 2-2026\\SI 2\\Primer_parcial\\entrenamiento_ia_ropa",
+  "summary": {
+    "bodies": 9,
+    "garments": 68,
+    "upper_body_garments": 21,
+    "metadata_rows": 68,
+    "invalid_images": 0,
+    "duplicate_groups": 0,
+    "paired_samples": {
+      "train": 0,
+      "val": 0,
+      "test": 0
+    }
+  },
+  "category_counts": {
+    "Blusas": 1,
+    "Camisas": 1,
+    "Camisetas - T-Shirts": 5,
+    "Chaquetas - Chamarras": 2,
+    "Enterizos - Monos": 6,
+    "Jeans - Mezclilla": 5,
+    "Pantalones": 3,
+    "Ropa de dormir - Pijamas": 8,
+    "Suéteres y Tejidos": 5,
+    "Tops - Crop Tops": 7,
+    "Vestidos": 25
+  },
+  "metadata": {
+    "missing_files": [],
+    "files_without_metadata": []
+  },
+  "duplicates": [],
+  "errors": [],
+  "status": {
+    "catalog_and_geometry_pilot_ready": true,
+    "supervised_vton_training_ready": false
+  },
+  "decision": "NO INICIAR FINE-TUNING: falta dataset pareado o hay errores",
+  "image_details": [
+    {
+      "path": "01_cuerpos/cuerpo_01_plus_size_curvy_bodysuit.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_02_plus_size_curvy_crop_shorts.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_03_pera_triangulo_caderas_anchas.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_04_ovalado_manzana_torso_redondo.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_05_rectangular_atletico_lineal.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_06_triangulo_invertido_atletico.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_07_reloj_arena_mediano_conjunto_blanco.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_08_esbelto_reloj_arena_bodysuit_negro.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "01_cuerpos/cuerpo_09_esbelto_atletico_crop_shorts.jpg",
+      "width": 768,
+      "height": 1376,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Blusas/blusa_blanca_bordado_ingles_peplum.jpg",
+      "width": 350,
+      "height": 467,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisas/camisa_clasica_rayas_azules_algodon.jpg",
+      "width": 420,
+      "height": 630,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisetas - T-Shirts/camiseta_basica_ajustada_azul_marino.jpg",
+      "width": 736,
+      "height": 902,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisetas - T-Shirts/camiseta_basica_slim_burdeos.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisetas - T-Shirts/camiseta_crop_rayas_marineras.jpg",
+      "width": 736,
+      "height": 981,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisetas - T-Shirts/camiseta_fruncida_lateral_marron.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Camisetas - T-Shirts/camiseta_raglan_botones_manga_negra.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Chaquetas - Chamarras/chaqueta_bomber_cuero_marron_vintage.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Chaquetas - Chamarras/chaqueta_bomber_cuero_vino_cinturon.jpg",
+      "width": 736,
+      "height": 946,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/conjunto_enterizo_top_estampado_palazzo_blanco.jpg",
+      "width": 736,
+      "height": 1307,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/conjunto_top_lunares_pantalon_palazzo_lino.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/enterizo_largo_palazzo_cruzado_verde.jpg",
+      "width": 736,
+      "height": 981,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/mono_corto_romper_camisero_ciruela.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/mono_corto_romper_militar_verde_oliva.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Enterizos - Monos/romper_bicolor_top_negro_short_blanco.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Jeans - Mezclilla/jeans_bootcut_flare_azul_medio.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Jeans - Mezclilla/jeans_rectos_tiro_alto_azul_marino.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Jeans - Mezclilla/jeans_wide_leg_azul_indigo_profundo.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Jeans - Mezclilla/jeans_wide_leg_celeste_wash_deslavado.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Jeans - Mezclilla/jeans_wide_leg_tiro_alto_gris_deslavado.jpg",
+      "width": 736,
+      "height": 1179,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Pantalones/pantalon_sastre_blanco_tiro_alto.jpg",
+      "width": 731,
+      "height": 995,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Pantalones/pantalon_sastre_raya_diplomatica_gris.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Pantalones/pantalon_sastre_wide_leg_beige_crema.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_dos_piezas_rayas_rosa_blanco.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_largo_saten_azul_marino_clasico.jpg",
+      "width": 736,
+      "height": 1386,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_largo_saten_ciruela_vivos_blancos.jpg",
+      "width": 735,
+      "height": 1103,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_saten_camisero_rosa_vivo_negro.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_saten_camisola_short_azul_noche.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_saten_lencero_vino_tiras.jpg",
+      "width": 736,
+      "height": 1181,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_top_negro_short_vichy_negro.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Ropa de dormir - Pijamas/pijama_top_tirantes_short_rayas_rosa.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Suéteres y Tejidos/set_cardigan_tejido_crop_rosa_pastel.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Suéteres y Tejidos/sueter_fluffy_crop_cuello_barco_rosa.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Suéteres y Tejidos/sueter_marinero_rayas_cuello_zipper.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Suéteres y Tejidos/sueter_punto_cuello_redondo_burdeos.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Suéteres y Tejidos/sueter_rayas_cremallera_cuello_amplio.jpg",
+      "width": 700,
+      "height": 1050,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/chaleco_top_sastre_peplum_gris.jpg",
+      "width": 736,
+      "height": 1029,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_asimetrico_lunares_azul_marino.jpg",
+      "width": 532,
+      "height": 663,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_canale_negro_cuello_lazo.jpg",
+      "width": 450,
+      "height": 656,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_corset_manga_abullonada_marron.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_drapeado_asimetrico_marron_chocolate.jpg",
+      "width": 736,
+      "height": 1078,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_peplum_negro_cinturon_cider.jpg",
+      "width": 700,
+      "height": 933,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Tops - Crop Tops/top_polo_contraste_marron_crema.jpg",
+      "width": 736,
+      "height": 1155,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_camisero_denim_celeste_lazo.jpg",
+      "width": 736,
+      "height": 981,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_camisero_midi_lino_blanco.jpg",
+      "width": 736,
+      "height": 982,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_chaleco_sastre_plisado_marron.jpg",
+      "width": 735,
+      "height": 925,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_denim_mini_tirantes_lazo_indigo.jpg",
+      "width": 736,
+      "height": 981,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_largo_drapeado_asimetrico_amarillo_mantequilla.jpg",
+      "width": 688,
+      "height": 1223,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_largo_drapeado_asimetrico_rojo_vino.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_blanco_marfil_volantes_escalonados.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_bordado_etnico_azul_marino.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_botanico_negro_manga_mariposa.jpg",
+      "width": 736,
+      "height": 1179,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_chifon_floral_rosa_abullonado.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_drapeado_azul_marino_escote_v.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_lino_crema_bordado_azul.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_negro_escote_cuadrado_abertura.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_princesa_azul_noche_manga_farol.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_midi_verde_oliva_mangas_fruncidas.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_babydoll_manga_globo_marron.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_cruzado_floral_verde_salvia.jpg",
+      "width": 735,
+      "height": 861,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_denim_tirantes_lazo.jpg",
+      "width": 720,
+      "height": 965,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_drop_waist_lunares_blanco.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_encaje_drapeado_un_hombro_marfil.jpg",
+      "width": 675,
+      "height": 1200,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_floral_negro_sin_mangas.jpg",
+      "width": 736,
+      "height": 1308,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_flores_azules_volantes_lazos.jpg",
+      "width": 720,
+      "height": 1280,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_mini_tirantes_crochet_marron_terracota.jpg",
+      "width": 651,
+      "height": 1008,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_pinafore_overol_denim_negro.jpg",
+      "width": 736,
+      "height": 1104,
+      "mode": "RGB"
+    },
+    {
+      "path": "02_prendas/Vestidos/vestido_wrap_lunares_negro_volantes.jpg",
+      "width": 736,
+      "height": 981,
+      "mode": "RGB"
+    }
+  ]
+}

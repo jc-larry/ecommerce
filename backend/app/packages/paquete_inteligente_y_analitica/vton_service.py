@@ -45,10 +45,10 @@ POSE_LANDMARKER_MODEL_PATH = os.getenv(
         "pose_landmarker_lite.task",
     ),
 )
-POSE_DETECTION_CONFIDENCE = float(os.getenv("POSE_DETECTION_CONFIDENCE", "0.70"))
-POSE_PRESENCE_CONFIDENCE = float(os.getenv("POSE_PRESENCE_CONFIDENCE", "0.70"))
+POSE_DETECTION_CONFIDENCE = float(os.getenv("POSE_DETECTION_CONFIDENCE", "0.55"))
+POSE_PRESENCE_CONFIDENCE = float(os.getenv("POSE_PRESENCE_CONFIDENCE", "0.55"))
 POSE_LANDMARK_CONFIDENCE_THRESHOLD = float(
-    os.getenv("POSE_LANDMARK_CONFIDENCE_THRESHOLD", "0.75")
+    os.getenv("POSE_LANDMARK_CONFIDENCE_THRESHOLD", "0.55")
 )
 PERSON_MASK_CONFIDENCE_THRESHOLD = float(
     os.getenv("PERSON_MASK_CONFIDENCE_THRESHOLD", "0.75")
@@ -936,29 +936,51 @@ class VirtualTryonAIService:
 
     @classmethod
     def _call_idm_vton_api(cls, person_image: str, garment_image: str, category: str) -> Optional[str]:
-        """Llamada a la API de inferencia de Hugging Face con el checkpoint de IDM-VTON."""
-        headers = {
-            "Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}",
-            "Content-Type": "application/json",
-        }
-        # Endpoint de modelo IDM-VTON en Hugging Face
-        api_url = "https://api-inference.huggingface.co/models/yisol/IDM-VTON"
-        payload = {
-            "inputs": {
-                "human_img": cls._as_external_image(person_image),
-                "garm_img": cls._as_external_image(garment_image),
-                "garment_des": category,
-                "is_checking": True,
-            }
-        }
+        """Llamada a la API de inferencia de Hugging Face Space con el modelo IDM-VTON."""
+        if not HUGGINGFACE_API_TOKEN:
+            return None
+
+        import tempfile
+        person_img = cls._load_image(person_image)
+        garment_img = cls._load_image(garment_image)
+        if person_img is None or garment_img is None:
+            logger.warning("No se pudieron cargar las imagenes para IDM-VTON.")
+            return None
+
+        temp_person = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        temp_garment = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         try:
-            resp = requests.post(api_url, json=payload, headers=headers, timeout=45.0)
-            if resp.status_code == 200:
-                # Retorna imagen binaria sintetizada en Base64
-                b64 = base64.b64encode(resp.content).decode("utf-8")
-                return f"data:image/jpeg;base64,{b64}"
+            person_img.convert("RGB").save(temp_person.name, format="PNG")
+            garment_img.convert("RGBA" if garment_img.mode in ("RGBA", "LA") else "RGB").save(temp_garment.name, format="PNG")
+            temp_person.close()
+            temp_garment.close()
+
+            from gradio_client import Client, handle_file
+            client = Client("yisol/IDM-VTON", token=HUGGINGFACE_API_TOKEN)
+            result = client.predict(
+                dict={"background": handle_file(temp_person.name), "layers": [], "composite": None},
+                garm_img=handle_file(temp_garment.name),
+                garment_des=category or "clothing item",
+                is_checked=True,
+                is_checked_crop=False,
+                denoise_steps=30,
+                seed=42,
+                api_name="/tryon"
+            )
+            output_path = result[0] if isinstance(result, (list, tuple)) else result
+            if output_path and os.path.exists(output_path):
+                with open(output_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                    return f"data:image/jpeg;base64,{b64}"
         except Exception as e:
-            logger.warning(f"Error en endpoint IDM-VTON Hugging Face: {e}")
+            logger.warning(f"Error en endpoint IDM-VTON Hugging Face Space: {e}")
+        finally:
+            for p in [temp_person.name, temp_garment.name]:
+                try:
+                    if os.path.exists(p):
+                        os.unlink(p)
+                except Exception:
+                    pass
         return None
 
     @classmethod

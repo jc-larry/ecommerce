@@ -3,6 +3,7 @@ import { NavigationEnd, Router } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './packages/paquete_seguridad_usuarios/auth.service';
 import { BranchContextService } from './packages/paquete_catalogo_y_tiendas/branches/branch-context.service';
+import { DialogService } from './shared/dialog.service';
 
 @Component({
   selector: 'app-root',
@@ -52,6 +53,7 @@ export class AppComponent implements OnInit, OnDestroy {
   constructor(
     public authService: AuthService,
     public branchContext: BranchContextService,
+    public dialogService: DialogService,
     private router: Router
   ) {}
 

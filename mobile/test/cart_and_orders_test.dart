@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:fashionstore_mobile/src/packages/ventas_y_pagos/cart_view.dart';
-import 'package:fashionstore_mobile/src/packages/ventas_y_pagos/customer_orders_view.dart';
+import 'package:fashionstore_mobile/src/packages/paquete_ventas_y_pagos/cart_view.dart';
+import 'package:fashionstore_mobile/src/packages/paquete_ventas_y_pagos/customer_orders_view.dart';
 
 void main() {
   group('[CU17 / CU18 / CU20] Pruebas de Carrito y Checkout Móvil', () {

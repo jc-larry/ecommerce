@@ -18,7 +18,7 @@ from app.packages.paquete_ventas_y_pagos.schemas import (
     OrderReturnCreate, OrderReturnResponse, CustomerReturnResponse, CustomerReturnItemResponse,
 )
 from app.packages.paquete_catalogo_y_tiendas.branches.models import Branch
-from app.packages.paquete_catalogo_y_tiendas.models import Product, ProductVariant, Color, Size, Coupon
+from app.packages.paquete_catalogo_y_tiendas.models import Product, ProductVariant, Color, Size, Coupon, SeasonalPromotion
 from app.packages.paquete_inventario_y_proveedores.merchandise.models import Inventory, InventoryLedger
 from app.packages.paquete_reservas_y_citas.models import Reservation
 from app.packages.paquete_seguridad_usuarios import User, RoleChecker, log_event, get_current_user, get_branch_scope, BranchScope
@@ -30,6 +30,30 @@ router = APIRouter(prefix="/api/v1/sales", tags=["sales"])
 staff_check = RoleChecker(allowed_roles=["SUPERADMIN", "ENCARGADO", "CAJERO"])
 # Cotizaciones, conversión y devoluciones son decisiones del encargado de sucursal (no del cajero).
 manager_check = RoleChecker(allowed_roles=["SUPERADMIN", "ENCARGADO"])
+
+
+def _get_product_effective_price(db: Session, prod: Optional[Product]) -> float:
+    """[CU13] Devuelve el precio unitario efectivo de una prenda considerando promociones estacionales activas."""
+    if not prod:
+        return 0.0
+    base = float(prod.base_price or 0.0)
+    today = date.today()
+    if prod.season_id:
+        active_promo = (
+            db.query(SeasonalPromotion)
+            .filter(
+                SeasonalPromotion.season_id == prod.season_id,
+                SeasonalPromotion.is_active == True,
+                SeasonalPromotion.start_date <= today,
+                SeasonalPromotion.end_date >= today,
+            )
+            .order_by(SeasonalPromotion.discount_percent.desc())
+            .first()
+        )
+        if active_promo:
+            disc = round(base * (active_promo.discount_percent / 100.0), 2)
+            return max(0.0, round(base - disc, 2))
+    return base
 
 
 # ===================================================================
@@ -142,7 +166,7 @@ def _build_cart_response(db: Session, cart: Cart) -> CartResponse:
         size = db.query(Size).filter(Size.id == variant.size_id).first()
         color = db.query(Color).filter(Color.id == variant.color_id).first()
 
-        unit_price = float(prod.base_price if prod else 0.0)
+        unit_price = _get_product_effective_price(db, prod)
         item_subtotal = round(unit_price * item.quantity, 2)
         subtotal += item_subtotal
 
@@ -183,7 +207,9 @@ def get_cart(
     current_user: User = Depends(get_current_user),
 ):
     """[CU17] Consulta el carrito de compras digital del usuario autenticado."""
+    # [CU17 - Paso 1] / [DSC017 - Paso 1] +get_cart(user_id)
     cart = _get_or_create_cart(db, current_user)
+    # [CU17 - Paso 2] / [DSC017 - Paso 2] +select_cart_items(cart_id)
     return _build_cart_response(db, cart)
 
 
@@ -194,11 +220,13 @@ def add_to_cart(
     current_user: User = Depends(get_current_user),
 ):
     """[CU17] Agrega una prenda al carrito con control estricto de existencias (bloqueo stock = 0)."""
+    # [CU17 - Paso 2] / [DSC017 - Paso 2] +add_to_cart(variant_id, quantity)
+    # [CU17 - Paso 3] / [DSC017 - Paso 3] +check_variant(variant_id)
     variant = db.query(ProductVariant).filter(ProductVariant.id == item_in.variant_id).first()
     if not variant or not variant.is_active:
         raise HTTPException(status_code=404, detail="Variante de prenda no encontrada o inactiva.")
 
-    # Control de existencias físicas
+    # [CU17 - Paso 4] / [DSC017 - Paso 4] +check_inventory_stock(variant_id)
     stock_total = (
         db.query(func.sum(Inventory.stock_actual))
         .filter(Inventory.variant_id == item_in.variant_id)
@@ -222,12 +250,14 @@ def add_to_cart(
             detail=f"Stock insuficiente. Solo quedan {stock_total} unidades disponibles."
         )
 
+    # [CU17 - Paso 5] / [DSC017 - Paso 5] +insert_or_update_cart_item(cart_id, variant_id, qty)
     if existing_item:
         existing_item.quantity = desired_qty
     else:
         db.add(CartItem(cart_id=cart.id, variant_id=item_in.variant_id, quantity=item_in.quantity))
 
     db.commit()
+    # [CU17 - Paso 6] / [DSC017 - Paso 6] +Carrito Actualizado
     return _build_cart_response(db, cart)
 
 
@@ -239,6 +269,7 @@ def update_cart_item(
     current_user: User = Depends(get_current_user),
 ):
     """[CU17] Actualiza la cantidad de un ítem en el carrito (0 lo elimina)."""
+    # [CU17 - Paso 2] / [DSC017 - Paso 2] +update_cart_item(item_id, quantity)
     cart = _get_or_create_cart(db, current_user)
     cart_item = db.query(CartItem).filter(CartItem.id == item_id, CartItem.cart_id == cart.id).first()
     if not cart_item:
@@ -252,6 +283,7 @@ def update_cart_item(
             .filter(Inventory.variant_id == cart_item.variant_id)
             .scalar() or 0
         )
+        # [CU17 - Paso 3] / [DSC017 - Paso 3] +validate_stock_availability(variant_id, qty)
         if item_in.quantity > stock_total:
             raise HTTPException(
                 status_code=400,
@@ -259,7 +291,9 @@ def update_cart_item(
             )
         cart_item.quantity = item_in.quantity
 
+    # [CU17 - Paso 5] / [DSC017 - Paso 5] +update_cart_item_and_commit()
     db.commit()
+    # [CU17 - Paso 6] / [DSC017 - Paso 6] +Carrito Actualizado
     return _build_cart_response(db, cart)
 
 
@@ -270,9 +304,12 @@ def remove_cart_item(
     current_user: User = Depends(get_current_user),
 ):
     """[CU17] Quita un producto del carrito digital."""
+    # [CU17 - Paso 2] / [DSC017 - Paso 2] +remove_cart_item(item_id)
     cart = _get_or_create_cart(db, current_user)
+    # [CU17 - Paso 5] / [DSC017 - Paso 5] +delete_cart_item()
     db.query(CartItem).filter(CartItem.id == item_id, CartItem.cart_id == cart.id).delete()
     db.commit()
+    # [CU17 - Paso 6] / [DSC017 - Paso 6] +Carrito Actualizado
     return _build_cart_response(db, cart)
 
 
@@ -282,9 +319,12 @@ def clear_cart(
     current_user: User = Depends(get_current_user),
 ):
     """[CU17] Vacía completamente el carrito digital."""
+    # [CU17 - Paso 2] / [DSC017 - Paso 2] +clear_cart(cart_id)
     cart = _get_or_create_cart(db, current_user)
+    # [CU17 - Paso 5] / [DSC017 - Paso 5] +delete_all_cart_items()
     db.query(CartItem).filter(CartItem.cart_id == cart.id).delete()
     db.commit()
+    # [CU17 - Paso 6] / [DSC017 - Paso 6] +Carrito Vaciado
     return _build_cart_response(db, cart)
 
 
@@ -383,7 +423,21 @@ def process_checkout(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """[CU18 / CU19 / CU20] Procesa una compra omnicanal con herencia de pagos y facturación IVA 13% (ACID)."""
+    """
+    [CU18 / CU19 / CU20] Procesa una compra omnicanal con herencia de pagos y facturación IVA 13% (ACID).
+    
+    Nomenclatura PUDS de Secuencia:
+    - CU18[Paso 1: El cliente ingresa a la pantalla de checkout desde el carrito de compras digital.]
+    - CU18[Paso 2: La interfaz envía la solicitud con dirección, sucursal de despacho y medio de pago seleccionado.]
+    - CU18[Paso 3: El controlador valida disponibilidad de stock en la sucursal seleccionada (con bloqueo pesimista).]
+    - CU18[Paso 4: Si se aplica cupón comercial, el sistema valida vigencia y descuenta el porcentaje/monto correspondiente.]
+    - CU18[Paso 5: Se registra la orden en base de datos en estado PAGADA y se descuenta el stock en el inventario de la sucursal.]
+    - CU18[Paso 6: Se procesa el pago según la subclase polimórfica (Efectivo, Tarjeta, QR, PayPal).]
+    - CU20[Paso 1: Se emite automáticamente la factura computarizada oficial con IVA 13% y código de control.]
+    - CU18[Paso 7: Se vacía el carrito, se registra la traza de despacho (Shipment) y se retorna el comprobante al cliente.]
+    """
+    # [CU18 - Paso 2] / [DSC018 - Paso 2] / [CU19 - Paso 2] +process_checkout(data)
+    # CU18[Paso 1 / CU19[Paso 1]: Validación de canal de atención y contexto de sucursal
     # [Separación por sucursal] Una venta POS es una operación de personal de tienda: exige
     # rol de staff y fuerza la sucursal real del usuario (ignora branch_id del cliente).
     # El canal ONLINE sigue abierto a cualquier usuario autenticado (checkout de cliente),
@@ -400,7 +454,8 @@ def process_checkout(
     if not branch:
         raise HTTPException(status_code=404, detail="Sucursal no encontrada.")
 
-    # Si es POS, validar turno de caja abierto y de propiedad del cajero autenticado
+    # [CU19 - Paso 3] / [DSC019 - Paso 3] +validar_turno_caja_abierto(cash_shift_id)
+    # CU19[Paso 2]: Si es POS, validar turno de caja abierto y de propiedad del cajero autenticado
     if data.channel == "POS":
         if not data.cash_shift_id:
             raise HTTPException(status_code=400, detail="Ventas en POS requieren un turno de caja activo (cash_shift_id).")
@@ -429,7 +484,8 @@ def process_checkout(
             if not variant:
                 raise HTTPException(status_code=404, detail=f"Variante {item.variant_id} no encontrada.")
             prod = db.query(Product).filter(Product.id == variant.product_id).first()
-            checkout_items.append((item.variant_id, item.quantity, float(prod.base_price if prod else 0.0)))
+            unit_price = _get_product_effective_price(db, prod)
+            checkout_items.append((item.variant_id, item.quantity, unit_price))
     else:
         # Canal ONLINE: tomar ítems del carrito del usuario
         cart = db.query(Cart).filter(Cart.user_id == current_user.id).first()
@@ -440,9 +496,10 @@ def process_checkout(
             if not variant:
                 continue
             prod = db.query(Product).filter(Product.id == variant.product_id).first()
-            checkout_items.append((item.variant_id, item.quantity, float(prod.base_price if prod else 0.0)))
+            unit_price = _get_product_effective_price(db, prod)
+            checkout_items.append((item.variant_id, item.quantity, unit_price))
 
-    # 2. Validar stock en la sucursal seleccionada y calcular subtotal
+    # CU18[Paso 3 / CU19[Paso 3]: Validar stock en la sucursal seleccionada y calcular subtotal
     subtotal = 0.0
     for var_id, qty, unit_price in checkout_items:
         inv = db.query(Inventory).filter(
@@ -459,7 +516,7 @@ def process_checkout(
 
     subtotal = round(subtotal, 2)
 
-    # 3. Aplicar cupón de descuento si existe (CU13)
+    # CU18[Paso 4]: Aplicar cupón de descuento si existe (CU13)
     discount_amount = 0.0
     if data.coupon_code:
         coupon = db.query(Coupon).filter(
@@ -477,7 +534,7 @@ def process_checkout(
 
     total_amount = max(0.0, round(subtotal - discount_amount, 2))
 
-    # 4. Crear la Orden
+    # CU18[Paso 5 / CU19[Paso 4]: Crear la Orden en base de datos
     order = Order(
         user_id=current_user.id,
         branch_id=data.branch_id,
@@ -492,7 +549,7 @@ def process_checkout(
     db.add(order)
     db.flush()
 
-    # 5. Insertar ítems y descontar inventario con registro en ledger
+    # CU18[Paso 5]: Insertar ítems y descontar inventario con registro en ledger
     order_ref = f"ORD-{order.id}"
     for var_id, qty, unit_price in checkout_items:
         db.add(OrderItem(order_id=order.id, variant_id=var_id, quantity=qty, unit_price=unit_price))
@@ -512,7 +569,7 @@ def process_checkout(
             reference_id=order_ref,
         ))
 
-    # 6. Crear Medio de Pago Polimórfico (STI)
+    # CU18[Paso 6 / CU19[Paso 5]: Crear Medio de Pago Polimórfico (STI: Efectivo, Tarjeta, QR, PayPal)
     p_type = data.payment_type
     if p_type == "EFECTIVO":
         cash_rec = data.cash_payment.cash_received if data.cash_payment else total_amount
@@ -572,7 +629,8 @@ def process_checkout(
 
     db.add(payment)
 
-    # 7. Generar Comprobante Fiscal (Factura IVA 13% o Nota de Entrega)
+    # [CU20 - Paso 1] / [DSC020 - Paso 1] +issue_invoice(IVA_13_percent, control_code)
+    # CU20[Paso 1: Emitir factura oficial computarizada con IVA 13% y código de control]
     tax_rate = 0.130
     tax_amount = round(total_amount * tax_rate, 2)
     control_code = None
@@ -592,7 +650,8 @@ def process_checkout(
     )
     db.add(invoice)
 
-    # 8. Si era venta ONLINE, vaciar el carrito, avisar al cliente y generar envío si corresponde (CU29, CU30, CU40)
+    # [CU18 - Paso 7] / [DSC018 - Paso 7] +clear_cart_notify_and_dispatch()
+    # CU18[Paso 7: Vaciar el carrito digital, notificar al cliente (CU40) y generar despacho logístico (CU29)]
     if data.channel == "ONLINE":
         cart = db.query(Cart).filter(Cart.user_id == current_user.id).first()
         if cart:
@@ -623,6 +682,8 @@ def process_checkout(
                 carrier_name="Moto Express",
                 carrier_phone=None,
                 delivery_address=address,
+                delivery_latitude=data.delivery_latitude,
+                delivery_longitude=data.delivery_longitude,
                 recipient_name=rec_name,
                 recipient_phone=rec_phone,
                 shipping_cost=cost,
@@ -660,12 +721,15 @@ def get_my_orders(
     current_user: User = Depends(get_current_user),
 ):
     """[CU24] Historial de compras y pedidos del cliente en sesión."""
+    # [CU24 - Paso 2] / [DSC024 - Paso 2] +get_my_orders(user_id)
+    # [CU24 - Paso 3] / [DSC024 - Paso 3] +select_orders_where(user_id)
     orders = (
         db.query(Order)
         .filter(Order.user_id == current_user.id)
         .order_by(Order.created_at.desc())
         .all()
     )
+    # [CU24 - Paso 4] / [DSC024 - Paso 4] +Retornar historial de compras
     return [_build_order_response(db, o) for o in orders]
 
 
@@ -677,6 +741,7 @@ def get_order_by_id(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU24] Detalle de una compra con sus ítems, comprobante y pago."""
+    # [CU24 - Paso 5] / [DSC024 - Paso 5] +get_order_detail(order_id)
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
@@ -686,6 +751,7 @@ def get_order_by_id(
     if not (is_owner or scope.is_central or is_staff_same_branch):
         # 404 en vez de 403: no confirmar a terceros que el pedido existe.
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
+    # [CU24 - Paso 6] / [DSC024 - Paso 6] +Retornar detalle con ítems, factura y tracking
     return _build_order_response(db, order)
 
 
@@ -737,10 +803,12 @@ def list_branch_fulfillment_orders(
     current_user: User = Depends(staff_check),
     scope: BranchScope = Depends(get_branch_scope),
 ):
-    """Pedidos online (retiro en tienda o delivery) de la sucursal del cajero para alistar y entregar.
+    """[CU19] Pedidos online (retiro en tienda o delivery) de la sucursal del cajero para alistar y entregar.
 
     El stock de estos pedidos ya se descontó de la sucursal elegida al pagar.
     """
+    # [CU19 - Paso 2] / [DSC019 - Paso 2] +get_orders_for_fulfillment(branch_scope)
+    # [CU19 - Paso 3] / [DSC019 - Paso 3] +select_orders_fulfillment()
     query = db.query(Order).filter(Order.channel == "ONLINE")
     if not scope.is_central:
         query = query.filter(Order.branch_id == scope.branch_id)
@@ -752,6 +820,7 @@ def list_branch_fulfillment_orders(
         query = query.filter(Order.status.in_(["PAGADA", "PREPARANDO", "LISTO_PARA_ENTREGA", "PENDIENTE"]))
 
     orders = query.order_by(Order.created_at.desc()).all()
+    # [CU19 - Paso 4] / [DSC019 - Paso 4] +Retornar pedidos de alistado
     return [_build_order_response(db, o) for o in orders]
 
 
@@ -764,7 +833,8 @@ def update_order_fulfillment(
     current_user: User = Depends(staff_check),
     scope: BranchScope = Depends(get_branch_scope),
 ):
-    """Permite al cajero / encargado alistar y marcar como despachado/entregado un pedido de su sucursal."""
+    """[CU19] Permite al cajero / encargado alistar y marcar como despachado/entregado un pedido de su sucursal."""
+    # [CU19 - Paso 5] / [DSC019 - Paso 5] +update_order_fulfillment(order_id, status)
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado.")
@@ -900,9 +970,11 @@ def open_cash_shift(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU23] Apertura de turno de caja con fondo inicial."""
+    # [CU23 - Paso 2] / [DSC023 - Paso 2] +open_shift(cajero_id, sucursal_id, monto_inicial)
     if not scope.is_central:
         data.branch_id = scope.branch_id
 
+    # [CU23 - Paso 3] / [DSC023 - Paso 3] +check_active_shift(cajero_id)
     active_shift = db.query(CashShift).filter(
         CashShift.cashier_id == current_user.id,
         CashShift.status == "ABIERTO"
@@ -916,6 +988,7 @@ def open_cash_shift(
             detail=f"Ya tienes el Turno #{active_shift.id} ABIERTO en la sucursal {branch_desc}. Debes cerrarlo o hacer el arqueo en esa sucursal antes de abrir una nueva caja aquí."
         )
 
+    # [CU23 - Paso 4] / [DSC023 - Paso 4] +insert(cash_shift, status='ABIERTO')
     shift = CashShift(
         cashier_id=current_user.id,
         branch_id=data.branch_id,
@@ -926,6 +999,7 @@ def open_cash_shift(
     db.commit()
     db.refresh(shift)
 
+    # [CU23 - Paso 5] / [DSC023 - Paso 5] +log_event(apertura_caja)
     log_event(db, current_user.id, "INSERT", "cash_shifts", shift.id,
               {"opening_amount": data.opening_amount, "branch_id": data.branch_id},
               request.client.host)
@@ -984,6 +1058,7 @@ def close_cash_shift(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU23] Cierre ciego de turno de caja y balance con ventas del sistema."""
+    # [CU23 - Paso 6] / [DSC023 - Paso 6] +close_shift(shift_id, monto_declarado)
     shift = db.query(CashShift).filter(CashShift.id == shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Turno de caja no encontrado.")
@@ -992,7 +1067,7 @@ def close_cash_shift(
     if shift.status == "CERRADO":
         raise HTTPException(status_code=400, detail="El turno de caja ya se encuentra cerrado.")
 
-    # Calcular ventas del sistema en efectivo
+    # [CU23 - Paso 7] / [DSC023 - Paso 7] +calculate_system_sales(shift_id)
     orders_in_shift = db.query(Order).filter(Order.cash_shift_id == shift.id).all()
     cash_sales = 0.0
     for ord in orders_in_shift:
@@ -1003,6 +1078,7 @@ def close_cash_shift(
     system_total = round(float(shift.opening_amount) + cash_sales, 2)
     difference = round(data.closing_amount_declared - system_total, 2)
 
+    # [CU23 - Paso 8] / [DSC023 - Paso 8] +update(cash_shift, status='CERRADO', diff)
     shift.closing_amount_declared = data.closing_amount_declared
     shift.closing_amount_system = system_total
     shift.difference = difference
@@ -1014,6 +1090,7 @@ def close_cash_shift(
     db.commit()
     db.refresh(shift)
 
+    # [CU23 - Paso 9] / [DSC023 - Paso 9] +log_event(cierre_caja) y confirmación
     log_event(db, current_user.id, "UPDATE", "cash_shifts", shift.id,
               {"declared": data.closing_amount_declared, "system": system_total, "diff": difference},
               request.client.host)
@@ -1034,9 +1111,11 @@ def create_quotation(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU21] Genera una cotización comercial con período de validez."""
+    # [CU21 - Paso 2] / [DSC021 - Paso 2] +create_quotation(cliente, items, vigencia)
     if not data.details:
         raise HTTPException(status_code=400, detail="La cotización debe incluir al menos una prenda.")
 
+    # [CU21 - Paso 3] / [DSC021 - Paso 3] +calcular_totales_y_fecha_vencimiento()
     total = 0.0
     q_items: List[tuple[int, int, float]] = []
 
@@ -1052,6 +1131,7 @@ def create_quotation(
     q_num = f"COT-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
     valid_until = datetime.now(timezone.utc) + timedelta(days=data.valid_days)
 
+    # [CU21 - Paso 4] / [DSC021 - Paso 4] +insert(quotation, status='VIGENTE')
     quotation = Quotation(
         quotation_number=q_num,
         customer_name=data.customer_name.strip(),
@@ -1097,6 +1177,7 @@ def create_quotation(
     db.commit()
     db.refresh(quotation)
 
+    # [CU21 - Paso 5] / [DSC021 - Paso 5] +log_event(cotizacion) y confirmación
     log_event(db, current_user.id, "INSERT", "quotations", quotation.id,
               {"quotation_number": quotation.quotation_number, "total": float(quotation.total_amount)},
               request.client.host)
@@ -1191,6 +1272,7 @@ def convert_quotation_to_order(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU21 -> CU18/CU20] Convierte una cotización vigente en venta formal con emisión de factura."""
+    # [CU21 - Paso 6] / [DSC021 - Paso 6] +convert_quotation(quotation_id, sucursal_id)
     if not scope.is_central:
         data.branch_id = scope.branch_id
 
@@ -1201,6 +1283,7 @@ def convert_quotation_to_order(
     if quotation.status == "CONVERTIDA":
         raise HTTPException(status_code=400, detail="Esta cotización ya fue convertida en una venta anteriormente.")
 
+    # [CU21 - Paso 7] / [DSC021 - Paso 7] +check_expiration_and_stock()
     now_utc = datetime.now(timezone.utc)
     v_until = quotation.valid_until
     if v_until.tzinfo is None:
@@ -1226,6 +1309,7 @@ def convert_quotation_to_order(
                 detail=f"Stock insuficiente en la sucursal para la prenda variante #{qi.variant_id} (Disponible: {avail}, Requerido: {qi.quantity})."
             )
 
+    # [CU21 - Paso 8] / [DSC021 - Paso 8] +process_checkout(channel='POS')
     pos_items = [CartItemAdd(variant_id=qi.variant_id, quantity=qi.quantity) for qi in quotation.items]
     checkout_payload = CheckoutRequest(
         channel="POS",
@@ -1237,6 +1321,7 @@ def convert_quotation_to_order(
         customer_business_name=data.customer_business_name or quotation.customer_name,
     )
     order_res = process_checkout(checkout_payload, request, db, current_user)
+    # [CU21 - Paso 9] / [DSC021 - Paso 9] +update(quotation, status='CONVERTIDA')
     quotation.status = "CONVERTIDA"
     db.commit()
     return order_res
@@ -1314,13 +1399,14 @@ def process_order_return(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU22] Procesa devolución de dinero o cambio de prendas reingresando stock al inventario."""
+    # [CU22 - Paso 2] / [DSC022 - Paso 2] +process_order_return(order_id, items, return_type)
     order = db.query(Order).filter(Order.id == data.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
     if not scope.is_central and order.branch_id != scope.branch_id:
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
 
-    # [Regla de Negocio] Validación de plazo máximo de 30 días para devolución
+    # [CU22 - Paso 3] / [DSC022 - Paso 3] +validar_plazo_maximo_30_dias(order.created_at)
     if order.created_at:
         now_utc = datetime.now(timezone.utc)
         order_time = order.created_at
@@ -1346,6 +1432,7 @@ def process_order_return(
         if data.return_type == "DEVOLUCION_DINERO":
             refund_total += float(order_it.unit_price) * it.quantity
 
+    # [CU22 - Paso 4] / [DSC022 - Paso 4] +insert(order_return, status='APROBADA')
     ret_num = f"DEV-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
     order_ret = OrderReturn(
         return_number=ret_num,
@@ -1367,7 +1454,7 @@ def process_order_return(
             replacement_variant_id=it.replacement_variant_id,
         ))
 
-        # Reingreso físico al stock de la sucursal
+        # [CU22 - Paso 5] / [DSC022 - Paso 5] +reingresar_stock_al_inventario_y_registrar_ledger()
         inv = db.query(Inventory).filter(
             Inventory.branch_id == order.branch_id,
             Inventory.variant_id == it.variant_id
@@ -1401,6 +1488,7 @@ def process_order_return(
                 reference_id=ret_num,
             ))
 
+    # [CU22 - Paso 6] / [DSC022 - Paso 6] +Devolución Procesada y Notificada
     tipo_texto = "Devolución de dinero" if data.return_type == "DEVOLUCION_DINERO" else "Cambio de prenda"
     detalle = f" Reembolso: Bs. {refund_total:.2f}." if data.return_type == "DEVOLUCION_DINERO" else ""
     notificar(

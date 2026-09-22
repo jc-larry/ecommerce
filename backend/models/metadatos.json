@@ -1,0 +1,25 @@
+{
+  "modelo": "vestidor_camara.onnx",
+  "version": "20260920-2236",
+  "arquitectura": "encoder separable + cabeza de flujo + fusion alfa, con PatchGAN",
+  "parametros": 124547,
+  "entrenado_por": "destilacion de CatVTON sobre catalogo FashionStore + personas vestidas",
+  "pares": 160,
+  "alto": 256,
+  "ancho": 192,
+  "entradas": {
+    "agnostica": "float32 [b,3,256,192] en [-1,1], zona en gris 128",
+    "zona": "float32 [b,1,256,192] en {0,1}",
+    "pose_mapa": "float32 [b,3,256,192] en [0,1]: torso, brazos, cuello",
+    "prenda": "float32 [b,3,256,192] en [-1,1] sobre blanco",
+    "mascara_prenda": "float32 [b,1,256,192] en {0,1}"
+  },
+  "salidas": {
+    "final": "float32 [b,3,256,192] en [-1,1]"
+  },
+  "fps_medido": 19.1,
+  "verificado": {
+    "bytes": 529824,
+    "error_max_vs_torch": 4.900991916656494e-05
+  }
+}

@@ -40,7 +40,18 @@ class CatalogApi {
       final r = await http
           .get(Uri.parse('${AuthService.apiBaseUrl}/catalog/categories'), headers: await _headers())
           .timeout(_timeout);
-      return r.statusCode == 200 ? jsonDecode(r.body) as List : [];
+      return r.statusCode == 200 ? jsonDecode(utf8.decode(r.bodyBytes)) as List : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<List<dynamic>> fetchSeasons() async {
+    try {
+      final r = await http
+          .get(Uri.parse('${AuthService.apiBaseUrl}/catalog/seasons'), headers: await _headers())
+          .timeout(_timeout);
+      return r.statusCode == 200 ? (jsonDecode(utf8.decode(r.bodyBytes)) as List) : [];
     } catch (_) {
       return [];
     }
@@ -141,6 +152,7 @@ class CatalogApi {
   static Future<Map<String, dynamic>> searchProducts({
     String? q,
     int? categoryId,
+    int? seasonId,
     int? branchId,
     int? sizeId,
     int? colorId,
@@ -154,6 +166,7 @@ class CatalogApi {
     final params = <String, String>{
       if (q != null && q.isNotEmpty) 'q': q,
       if (categoryId != null) 'category_id': categoryId.toString(),
+      if (seasonId != null) 'season_id': seasonId.toString(),
       if (branchId != null) 'branch_id': branchId.toString(),
       if (sizeId != null) 'size_id': sizeId.toString(),
       if (colorId != null) 'color_id': colorId.toString(),

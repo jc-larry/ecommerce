@@ -39,10 +39,10 @@
         <!-- Prendas sugeridas dentro del bot -->
         <div *ngIf="m.suggested_products && m.suggested_products.length > 0" class="mt-2 d-flex flex-column gap-2">
           <div *ngFor="let p of m.suggested_products" class="p-2 bg-white rounded-3 border d-flex align-items-center gap-2 shadow-xs cursor-pointer" (click)="viewProduct(p.id)">
-            <img [src]="p.image_url || '/assets/images/placeholder.png'" class="rounded-2" style="width: 36px; height: 36px; object-fit: cover;">
+            <img [src]="resolveImageUrl(p.image_url)" class="rounded-2" style="width: 44px; height: 44px; object-fit: cover;" (error)="$any($event.target).src=fallbackImage">
             <div class="flex-grow-1 overflow-hidden">
               <div class="small fw-semibold text-truncate text-dark">{{ p.name }}</div>
-              <small class="text-primary fw-bold">Bs. {{ p.price | number:'1.2-2' }}</small>
+              <small class="text-primary fw-bold">Bs. {{ (p.price || p.base_price || 0) | number:'1.2-2' }}</small>
             </div>
             <i class="bi bi-chevron-right text-muted small"></i>
           </div>

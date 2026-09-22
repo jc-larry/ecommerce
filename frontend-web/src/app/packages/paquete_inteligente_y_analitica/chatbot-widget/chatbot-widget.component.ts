@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
 import { AnaliticaService, ChatbotResponse } from '../analitica.service';
+import { CatalogoService } from '../../paquete_catalogo_y_tiendas/catalogo.service';
 
 interface ChatMessage {
   sender: 'USER' | 'BOT';
@@ -24,6 +25,7 @@ export class ChatbotWidgetComponent implements OnInit {
 
   constructor(
     private analiticaService: AnaliticaService,
+    private catalogoService: CatalogoService,
     private router: Router
   ) {}
 
@@ -45,6 +47,13 @@ export class ChatbotWidgetComponent implements OnInit {
   getCurrentTime(): string {
     const now = new Date();
     return now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+  }
+
+  readonly fallbackImage = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="%23c66f5c" stroke-width="1.5"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+
+  resolveImageUrl(url?: string): string {
+    if (!url || !url.trim()) return this.fallbackImage;
+    return this.catalogoService.resolveImageUrl(url);
   }
 
   sendMessage(textToSend?: string): void {

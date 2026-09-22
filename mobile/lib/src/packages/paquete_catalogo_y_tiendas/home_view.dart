@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
 import '../paquete_seguridad_usuarios/login_view.dart';
-import '../paquete_paquete_ventas_y_pagos/customer_orders_view.dart';
-import '../paquete_paquete_reservas_y_citas/reservations_view.dart';
-import '../paquete_paquete_envios_y_logistica/tracking_view.dart';
-import '../paquete_paquete_inteligente_y_analitica/virtual_tryon_view.dart';
-import '../paquete_paquete_inteligente_y_analitica/chatbot_view.dart';
-import '../paquete_paquete_notificaciones/notifications_view.dart';
+import '../paquete_ventas_y_pagos/customer_orders_view.dart';
+import '../paquete_reservas_y_citas/reservations_view.dart';
+import '../paquete_envios_y_logistica/tracking_view.dart';
+import '../paquete_inteligente_y_analitica/virtual_tryon_view.dart';
+import '../paquete_inteligente_y_analitica/chatbot_view.dart';
+import '../paquete_notificaciones/notifications_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);

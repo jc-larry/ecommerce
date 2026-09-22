@@ -219,9 +219,11 @@ class SeasonalPromotion(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     discount_percent: Mapped[int] = mapped_column(nullable=False)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
+    season_id: Mapped[Optional[int]] = mapped_column(ForeignKey("seasons.id", ondelete="SET NULL"), nullable=True)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     category: Mapped[Optional["Category"]] = relationship("Category")
+    season: Mapped[Optional["Season"]] = relationship("Season")

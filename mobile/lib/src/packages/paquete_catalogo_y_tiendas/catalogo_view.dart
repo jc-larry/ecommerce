@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
-import '../paquete_paquete_inteligente_y_analitica/virtual_tryon_view.dart';
+import '../paquete_inteligente_y_analitica/virtual_tryon_view.dart';
 import 'catalog_api.dart';
 import 'product_detail_view.dart';
 
@@ -26,11 +26,13 @@ class CatalogoView extends StatefulWidget {
 class _CatalogoViewState extends State<CatalogoView> {
   List<dynamic> _products = [];
   List<dynamic> _categories = [];
+  List<dynamic> _seasons = [];
   Map<int, Map<String, dynamic>> _ratings = {};
   Set<int> _wishlist = {};
   bool _loading = true;
   String _search = '';
   int? _catFilter;
+  int? _seasonFilter;
 
   // [CU34] Búsqueda por voz: transcripción en el teléfono + extracción de entidades en el backend.
   final SpeechToText _speech = SpeechToText();
@@ -59,6 +61,7 @@ class _CatalogoViewState extends State<CatalogoView> {
         CatalogApi.fetchCategories(),
         CatalogApi.fetchRatingsSummary(),
         CatalogApi.fetchWishlistIds(),
+        CatalogApi.fetchSeasons(),
       ]);
       if (!mounted) return;
       setState(() {
@@ -66,6 +69,7 @@ class _CatalogoViewState extends State<CatalogoView> {
         _categories = results[1] as List;
         _ratings = results[2] as Map<int, Map<String, dynamic>>;
         _wishlist = results[3] as Set<int>;
+        _seasons = results[4] as List;
         _loading = false;
       });
     } catch (_) {
@@ -179,8 +183,47 @@ class _CatalogoViewState extends State<CatalogoView> {
       final txt = t.isEmpty || '${p['name']} ${p['description'] ?? ''}'.toLowerCase().contains(t);
       final catId = p['category']?['id'] ?? p['category_id'];
       final cat = _catFilter == null || catId == _catFilter;
-      return txt && cat;
+      final seasonId = p['season']?['id'] ?? p['season_id'];
+      final season = _seasonFilter == null || seasonId == _seasonFilter;
+      return txt && cat && season;
     }).toList();
+  }
+
+  String _seasonEmoji(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('primavera')) return '🌸';
+    if (n.contains('verano')) return '☀️';
+    if (n.contains('otoño') || n.contains('otono')) return '🍂';
+    if (n.contains('invierno')) return '❄️';
+    return '✨';
+  }
+
+  Widget _seasonChip(int? id, String name) {
+    final active = _seasonFilter == id;
+    final emoji = id == null ? '🌟' : _seasonEmoji(name);
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        selected: active,
+        avatar: Text(emoji, style: const TextStyle(fontSize: 13)),
+        label: Text(
+          name,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: active ? FontWeight.bold : FontWeight.w500,
+            color: active ? _brand : _ink,
+          ),
+        ),
+        backgroundColor: Colors.white,
+        selectedColor: const Color(0xFFFBECE8),
+        side: BorderSide(
+          color: active ? _brand : const Color(0xFFE2D6D2),
+          width: active ? 1.5 : 1.0,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        onSelected: (_) => setState(() => _seasonFilter = active ? null : id),
+      ),
+    );
   }
 
   String? _primaryImage(Map<String, dynamic> p) {
@@ -378,6 +421,33 @@ class _CatalogoViewState extends State<CatalogoView> {
                     const SizedBox(height: 16),
                   ],
 
+                  // Temporadas de Moda (CU13)
+                  if (_seasons.isNotEmpty) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Temporadas de Moda', style: TextStyle(fontWeight: FontWeight.bold, color: _ink)),
+                        if (_seasonFilter != null)
+                          GestureDetector(
+                            onTap: () => setState(() => _seasonFilter = null),
+                            child: const Text('Ver todas', style: TextStyle(fontSize: 12, color: _brand, fontWeight: FontWeight.w600)),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 38,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          _seasonChip(null, 'Todas'),
+                          ..._seasons.map((s) => _seasonChip(s['id'] as int, s['name'] as String)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
                   // Hero
                   if (_catFilter == null)
                     Container(
@@ -499,8 +569,12 @@ class _CatalogoViewState extends State<CatalogoView> {
   Widget _card(Map<String, dynamic> p) {
     final img = _primaryImage(p);
     final base = (p['base_price'] as num).toDouble();
+    final effectivePrice = p['effective_price'] != null ? (p['effective_price'] as num).toDouble() : base;
     final cmp = p['compare_at_price'] == null ? null : (p['compare_at_price'] as num).toDouble();
     final disc = p['discount_percent'] as int? ?? 0;
+    final seasonalDiscount = p['seasonal_discount_percent'] as int? ?? 0;
+    final seasonalPromoName = p['seasonal_promotion_name'] as String?;
+    final seasonName = p['season'] != null ? (p['season']['name'] as String?) : null;
     final r = _ratings[p['id']];
     final wished = _wishlist.contains(p['id']);
 
@@ -525,7 +599,19 @@ class _CatalogoViewState extends State<CatalogoView> {
                       : const Center(child: Icon(Icons.image_outlined, size: 36, color: Color(0xFFD4CECB))),
                 ),
               ),
-              if (disc > 0)
+              if (seasonalDiscount > 0)
+                Positioned(top: 6, left: 6, child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFD2624C), borderRadius: BorderRadius.circular(999)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('🔥 ', style: TextStyle(fontSize: 9)),
+                      Text('-$seasonalDiscount%', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ))
+              else if (disc > 0)
                 Positioned(top: 6, left: 6, child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(color: const Color(0xFFD2624C), borderRadius: BorderRadius.circular(999)),
@@ -574,26 +660,64 @@ class _CatalogoViewState extends State<CatalogoView> {
           Padding(
             padding: const EdgeInsets.all(10),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(p['category']?['name'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 10, color: _muted)),
+              Row(children: [
+                Expanded(
+                  child: Text(p['category']?['name'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 10, color: _muted)),
+                ),
+                if (seasonName != null && seasonName.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFBECE8),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${_seasonEmoji(seasonName)} $seasonName',
+                      style: const TextStyle(fontSize: 9, color: _brand, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ]),
               Text(p['name'] as String, maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _ink)),
               const SizedBox(height: 3),
               Row(children: [
-                Text('Bs. ${base.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, color: _brand, fontSize: 13)),
-                if (cmp != null) ...[
+                Text(
+                  'Bs. ${effectivePrice.toStringAsFixed(0)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: _brand, fontSize: 13),
+                ),
+                if (effectivePrice < base) ...[
+                  const SizedBox(width: 5),
+                  Text('Bs. ${base.toStringAsFixed(0)}',
+                      style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFFA99C98), fontSize: 11)),
+                ] else if (cmp != null) ...[
                   const SizedBox(width: 5),
                   Text('Bs. ${cmp.toStringAsFixed(0)}',
                       style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFFA99C98), fontSize: 11)),
                 ],
               ]),
+              if (seasonalPromoName != null && seasonalPromoName.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    seasonalPromoName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 9, color: Color(0xFFD2624C), fontWeight: FontWeight.w600),
+                  ),
+                ),
               if (r != null && (r['count'] as int) > 0)
-                Row(children: [
-                  const Icon(Icons.star, size: 12, color: Color(0xFFE8B04B)),
-                  const SizedBox(width: 2),
-                  Text('${(r['average'] as num).toStringAsFixed(1)} (${r['count']})',
-                      style: const TextStyle(fontSize: 11, color: _muted)),
-                ]),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(children: [
+                    const Icon(Icons.star, size: 12, color: Color(0xFFE8B04B)),
+                    const SizedBox(width: 2),
+                    Text('${(r['average'] as num).toStringAsFixed(1)} (${r['count']})',
+                        style: const TextStyle(fontSize: 11, color: _muted)),
+                  ]),
+                ),
             ]),
           ),
         ]),

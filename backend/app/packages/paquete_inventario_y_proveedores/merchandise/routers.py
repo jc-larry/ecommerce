@@ -458,6 +458,7 @@ def create_stock_transfer(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU15] Crea una solicitud de transferencia de inventario entre sucursales."""
+    # [CU15 - Paso 2] / [DSC015 - Paso 2] +create_stock_transfer(origen_id, destino_id, items)
     if not scope.is_central:
         # Un ENCARGADO/CAJERO solo puede originar transferencias desde su propia sucursal;
         # el destino sí puede ser cualquier otra sucursal de la cadena.
@@ -465,6 +466,7 @@ def create_stock_transfer(
     if data.origin_branch_id == data.destination_branch_id:
         raise HTTPException(status_code=400, detail="La sucursal de origen y destino no pueden ser la misma.")
 
+    # [CU15 - Paso 3] / [DSC015 - Paso 3] +check_branches_and_variants()
     origin = db.query(Branch).filter(Branch.id == data.origin_branch_id).first()
     dest = db.query(Branch).filter(Branch.id == data.destination_branch_id).first()
     if not origin or not dest:
@@ -473,6 +475,7 @@ def create_stock_transfer(
     if not data.details:
         raise HTTPException(status_code=400, detail="La transferencia debe contener al menos un producto.")
 
+    # [CU15 - Paso 4] / [DSC015 - Paso 4] +insert(stock_transfer, status='SOLICITADA')
     transfer_num = f"TRF-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
     trf = StockTransfer(
         transfer_number=transfer_num,
@@ -485,6 +488,7 @@ def create_stock_transfer(
     db.add(trf)
     db.flush()
 
+    # [CU15 - Paso 5] / [DSC015 - Paso 5] +insert(transfer_details)
     for item in data.details:
         if not db.query(ProductVariant.id).filter(ProductVariant.id == item.variant_id).first():
             raise HTTPException(status_code=404, detail=f"Variante {item.variant_id} no encontrada.")
@@ -498,6 +502,7 @@ def create_stock_transfer(
     db.commit()
     db.refresh(trf)
 
+    # [CU15 - Paso 6] / [DSC015 - Paso 6] +log_event(transfer) y confirmación
     log_event(db, current_user.id, "INSERT", "stock_transfers", trf.id,
               {"transfer_number": trf.transfer_number, "origin_id": origin.id, "dest_id": dest.id},
               request.client.host)
@@ -558,6 +563,7 @@ def update_transfer_status(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU15] Actualiza el estado de la transferencia afectando existencias y el libro mayor (ACID)."""
+    # [CU15 - Paso 7] / [DSC015 - Paso 7] +update_transfer_status(transfer_id, new_status)
     trf = db.query(StockTransfer).filter(StockTransfer.id == transfer_id).first()
     if not trf:
         raise HTTPException(status_code=404, detail="Transferencia no encontrada.")
@@ -572,6 +578,7 @@ def update_transfer_status(
     if current_status in ["COMPLETADA", "CANCELADA"]:
         raise HTTPException(status_code=400, detail=f"No se puede cambiar el estado de una transferencia ya {current_status}.")
 
+    # [CU15 - Paso 8] / [DSC015 - Paso 8] +descontar_stock_origen_y_registrar_ledger()
     # 1. Transición a EN_TRANSITO (Descuento de stock en origen)
     if new_status == "EN_TRANSITO":
         if current_status != "SOLICITADA":
@@ -609,6 +616,7 @@ def update_transfer_status(
 
         trf.status = "EN_TRANSITO"
 
+    # [CU15 - Paso 9] / [DSC015 - Paso 9] +incrementar_stock_destino_y_registrar_ledger()
     # 2. Transición a COMPLETADA (Recepción en destino)
     elif new_status == "COMPLETADA":
         # Si venía de SOLICITADA directo a COMPLETADA, descontar primero de origen
@@ -722,6 +730,8 @@ def get_stock_alerts(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU16] Obtiene alertas de stock mínimo (reposición urgente) y sobrestock."""
+    # [CU16 - Paso 2] / [DSC016 - Paso 2] +get_stock_alerts(branch_id)
+    # [CU16 - Paso 3] / [DSC016 - Paso 3] +select_inventory_where_thresholds_exceeded()
     effective_branch_id = branch_id if scope.is_central else scope.branch_id
     query = (
         db.query(Inventory, Branch.name.label("branch_name"), ProductVariant, Product.name.label("product_name"), Size.name.label("size_name"), Color.name.label("color_name"))
@@ -740,6 +750,7 @@ def get_stock_alerts(
 
     rows = query.order_by(Inventory.stock_actual.asc()).all()
 
+    # [CU16 - Paso 4] / [DSC016 - Paso 4] +classify_alerts_quiebre_or_sobrestock()
     alerts = []
     for inv, b_name, var, p_name, s_name, c_name in rows:
         alert_type = "QUIEBRE_STOCK" if inv.stock_actual <= inv.stock_minimo else "SOBRESTOCK"
@@ -758,6 +769,7 @@ def get_stock_alerts(
                 alert_type=alert_type,
             )
         )
+    # [CU16 - Paso 5] / [DSC016 - Paso 5] +Retornar alertas de stock activas
     return alerts
 
 
@@ -772,6 +784,7 @@ def update_stock_thresholds(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """[CU16] Configura umbrales de stock mínimo y máximo para una sucursal y variante."""
+    # [CU16 - Paso 6] / [DSC016 - Paso 6] +update_stock_thresholds(branch_id, variant_id, min, max)
     if not scope.is_central and branch_id != scope.branch_id:
         raise HTTPException(status_code=404, detail="Registro de inventario no encontrado.")
     inv = db.query(Inventory).filter(
@@ -784,10 +797,12 @@ def update_stock_thresholds(
     if data.stock_minimo >= data.stock_maximo:
         raise HTTPException(status_code=400, detail="El stock mínimo debe ser menor al stock máximo.")
 
+    # [CU16 - Paso 7] / [DSC016 - Paso 7] +update(inventory, stock_minimo, stock_maximo)
     inv.stock_minimo = data.stock_minimo
     inv.stock_maximo = data.stock_maximo
     db.commit()
 
+    # [CU16 - Paso 8] / [DSC016 - Paso 8] +log_event(thresholds) y confirmación
     log_event(db, current_user.id, "UPDATE", "inventory", variant_id,
               {"branch_id": branch_id, "stock_minimo": data.stock_minimo, "stock_maximo": data.stock_maximo},
               request.client.host)

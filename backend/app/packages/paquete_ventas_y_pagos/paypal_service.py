@@ -2,14 +2,21 @@
 
 Crea y captura órdenes en PayPal (sandbox o live) con conversión BOB -> USD.
 
-Modo simulación: solo cuando NO hay credenciales reales configuradas (valores vacíos o
-de ejemplo con "demo"/"test"). Con credenciales reales, cualquier fallo de PayPal se
-reporta como error: nunca se fabrica un pago aprobado.
+Modo simulación (por defecto, PAYPAL_SIMULATION=true, o sin credenciales reales): el
+comprador inicia sesión en una ventana tipo PayPal con la cuenta del simulador
+(PAYPAL_SIM_EMAIL / PAYPAL_SIM_PASSWORD), aprueba, y recién entonces la orden se captura.
+El simulador no guarda estado: el ID de la orden (con su monto), la aprobación y la captura
+van firmados con HMAC(SECRET_KEY), así que funcionan aunque el servidor se reinicie entre
+un paso y otro (uvicorn --reload, Render dormido) o haya varios procesos.
+Con PAYPAL_SIMULATION=false y credenciales reales, cualquier fallo de PayPal se reporta
+como error: nunca se fabrica un pago aprobado.
 """
 import uuid
 import base64
+import hmac
 import logging
 import json
+import re
 from typing import Dict, Any, Optional
 
 import httpx
@@ -22,9 +29,16 @@ logger.setLevel(logging.DEBUG)
 
 SIMULATED_ORDER_PREFIX = "PAYPAL-SIM-"
 PAYPAL_UNAVAILABLE = "No se pudo procesar el pago con PayPal. Intenta nuevamente en unos minutos."
+SIM_LOGIN_FAILED = "Parece que el correo electrónico o la contraseña son incorrectos. Inténtalo de nuevo."
+SIM_NOT_APPROVED = "El comprador no aprobó el pago en PayPal. Inicia sesión y confirma el pago."
+SIM_BAD_ORDER = "La orden de PayPal no existe."
+# PAYPAL-SIM-<10 hex>-<centavos USD>-<firma 16>  y, ya cobrada:  <orden>-C<firma 12>
+_SIM_ORDER_RE = re.compile(r"(PAYPAL-SIM-[0-9A-F]{10}-(\d{1,9}))-([0-9A-F]{16})")
+_SIM_CAPTURED_RE = re.compile(r"(PAYPAL-SIM-[0-9A-F]{10}-\d{1,9}-[0-9A-F]{16})-C([0-9A-F]{12})")
 
 
 class PayPalService:
+
     @property
     def client_id(self) -> str:
         return settings.PAYPAL_CLIENT_ID
@@ -48,10 +62,78 @@ class PayPalService:
         return round(float(amount_bob) / self.exchange_rate, 2)
 
     def is_simulation(self) -> bool:
-        """True si no hay credenciales reales de PayPal (entorno académico sin cuenta sandbox)."""
+        """True si no hay credenciales reales de PayPal, si el modo es simulación o flag activa."""
+        if str(settings.PAYPAL_MODE).lower() in ("simulation", "simulator", "simulado"):
+            return True
+        if settings.PAYPAL_SIMULATION:
+            return True
         cid = (self.client_id or "").lower()
         secret = (self.client_secret or "").lower()
         return not cid or not secret or "demo" in cid or "test" in cid or "demo" in secret
+
+    # ------------------------------------------------------------------
+    # Simulador: inicio de sesión del comprador y aprobación de la orden
+    # ------------------------------------------------------------------
+    def simulator_account(self) -> Dict[str, Any]:
+        """Perfil público de la cuenta compradora del simulador (sin contraseña)."""
+        given, _, surname = settings.PAYPAL_SIM_NAME.partition(" ")
+        return {
+            "payer_id": "SIM" + hmac.new(
+                settings.SECRET_KEY.encode(), settings.PAYPAL_SIM_EMAIL.encode(), "sha256"
+            ).hexdigest()[:10].upper(),
+            "email_address": settings.PAYPAL_SIM_EMAIL,
+            "name": {"given_name": given, "surname": surname},
+        }
+
+    def simulator_login(self, email: str, password: str) -> Dict[str, Any]:
+        """Valida las credenciales de la cuenta del simulador. Lanza 401 si no coinciden.
+
+        La contraseña solo se compara (en tiempo constante); nunca se registra ni se guarda.
+        """
+        email_ok = hmac.compare_digest((email or "").strip().lower().encode(), settings.PAYPAL_SIM_EMAIL.encode())
+        pass_ok = hmac.compare_digest((password or "").encode(), settings.PAYPAL_SIM_PASSWORD.encode())
+        if not (email_ok and pass_ok):
+            raise HTTPException(status_code=401, detail=SIM_LOGIN_FAILED)
+        return self.simulator_account()
+
+    # --- Firmas del simulador (sin estado en memoria) ---
+    @staticmethod
+    def _sign(*parts: str, length: int = 16) -> str:
+        msg = "|".join(parts).encode()
+        return hmac.new(settings.SECRET_KEY.encode(), msg, "sha256").hexdigest()[:length].upper()
+
+    def _new_sim_order_id(self, amount_usd: float) -> str:
+        base = f"{SIMULATED_ORDER_PREFIX}{uuid.uuid4().hex[:10].upper()}-{int(round(amount_usd * 100))}"
+        return f"{base}-{self._sign('order', base)}"
+
+    def _sim_order_amount(self, paypal_order_id: str) -> Optional[float]:
+        """Monto USD de una orden simulada auténtica (firma válida); None si es falsa."""
+        m = _SIM_ORDER_RE.fullmatch(paypal_order_id or "")
+        if not m or not hmac.compare_digest(m.group(3), self._sign("order", m.group(1))):
+            return None
+        return int(m.group(2)) / 100
+
+    def _approval_token(self, paypal_order_id: str) -> str:
+        return self._sign("approved", paypal_order_id, settings.PAYPAL_SIM_EMAIL, length=32)
+
+    def _captured_id(self, paypal_order_id: str) -> str:
+        return f"{paypal_order_id}-C{self._sign('captured', paypal_order_id, length=12)}"
+
+    def simulator_approve(self, paypal_order_id: str, email: str, password: str) -> Dict[str, Any]:
+        """El comprador inicia sesión y aprueba una orden simulada (equivale a 'Pagar' en PayPal).
+
+        Devuelve un `approval_token` firmado que `/capture-order` exige para cobrar la orden.
+        """
+        if self._sim_order_amount(paypal_order_id) is None:
+            raise HTTPException(status_code=400, detail=SIM_BAD_ORDER)
+        payer = self.simulator_login(email, password)
+        logger.info("Orden simulada aprobada por el comprador: %s", paypal_order_id)
+        return {
+            "id": paypal_order_id,
+            "status": "APPROVED",
+            "payer": payer,
+            "approval_token": self._approval_token(paypal_order_id),
+        }
 
     def _basic_auth_header(self) -> Dict[str, str]:
         encoded = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
@@ -86,7 +168,7 @@ class PayPalService:
         """
         status = {"mode": settings.PAYPAL_MODE, "api_base": self.base_url, "simulated": self.is_simulation()}
         if self.is_simulation():
-            return {**status, "connected": False, "detail": "Sin credenciales de PayPal: modo simulación."}
+            return {**status, "connected": False, "detail": "Simulador de PayPal activo (no se contacta a PayPal)."}
         try:
             await self.get_access_token()
         except HTTPException:
@@ -99,22 +181,24 @@ class PayPalService:
         reference_id: str,
         description: str = "Pago en FashionStore",
         customer_email: Optional[str] = None,
+        force_simulation: bool = False,
     ) -> Dict[str, Any]:
         """Crea una orden en PayPal (intent: CAPTURE). Retorna el order_id y approve_url.
 
-        En modo simulación: genera una orden ficticia sin conectar a PayPal.
+        En modo simulación o si force_simulation=True: genera orden simulada inmediatamente.
         """
         amount_usd = self.bob_to_usd(amount_bob)
+        is_sim = self.is_simulation() or force_simulation
         base = {
             "amount_bob": amount_bob,
             "amount_usd": amount_usd,
             "currency": "USD",
             "exchange_rate": self.exchange_rate,
-            "simulated": self.is_simulation(),
+            "simulated": is_sim,
         }
 
-        if self.is_simulation():
-            sim_id = f"{SIMULATED_ORDER_PREFIX}{uuid.uuid4().hex[:10].upper()}"
+        if is_sim:
+            sim_id = self._new_sim_order_id(amount_usd)
             logger.info(f"Orden simulada creada: {sim_id} (Bs. {amount_bob:.2f} = USD {amount_usd:.2f})")
             return {**base, "id": sim_id, "status": "CREATED", "approve_url": sim_id}
 
@@ -129,36 +213,15 @@ class PayPalService:
                     "amount": {
                         "currency_code": "USD",
                         "value": f"{amount_usd:.2f}",
-                        "breakdown": {
-                            "item_total": {
-                                "currency_code": "USD",
-                                "value": f"{amount_usd:.2f}"
-                            }
-                        }
                     },
-                    "items": [
-                        {
-                            "name": description[:120],
-                            "quantity": "1",
-                            "unit_amount": {
-                                "currency_code": "USD",
-                                "value": f"{amount_usd:.2f}"
-                            }
-                        }
-                    ]
                 }
             ],
-            "payment_source": {
-                "paypal": {
-                    "experience_context": {
-                        "brand_name": "FashionStore",
-                        "locale": "es-BO",
-                        "user_action": "PAY_NOW",
-                        "shipping_preference": "NO_SHIPPING",
-                        "return_url": f"{settings.FRONTEND_URL}/store/checkout/success",
-                        "cancel_url": f"{settings.FRONTEND_URL}/store/checkout/cancel",
-                    }
-                }
+            "application_context": {
+                "brand_name": "FashionStore",
+                "user_action": "PAY_NOW",
+                "shipping_preference": "NO_SHIPPING",
+                "return_url": f"{settings.FRONTEND_URL}/store/checkout/success",
+                "cancel_url": f"{settings.FRONTEND_URL}/store/checkout/cancel",
             },
         }
 
@@ -201,21 +264,29 @@ class PayPalService:
         logger.info(f"✅ Orden PayPal creada: {data.get('id')} | Approve URL: {approve_url}")
         return {**base, "id": data.get("id"), "status": data.get("status"), "approve_url": approve_url}
 
-    async def capture_order(self, paypal_order_id: str) -> Dict[str, Any]:
+    async def capture_order(self, paypal_order_id: str, approval_token: Optional[str] = None) -> Dict[str, Any]:
         """Captura los fondos de una orden aprobada por el comprador.
 
-        En modo simulación: aprueba automáticamente sin conectar a PayPal.
+        Orden simulada: solo se captura con el `approval_token` que devolvió
+        `simulator_approve`; no se contacta a PayPal. El `id` devuelto (orden + firma de
+        captura) es el comprobante que el checkout y las reservas verifican.
         """
-        if self.is_simulation():
-            if not paypal_order_id.startswith(SIMULATED_ORDER_PREFIX):
-                raise HTTPException(status_code=400, detail="Orden de PayPal no válida.")
-            capture_id = f"CAP-SIM-{uuid.uuid4().hex[:12].upper()}"
+        if self.is_simulation() or (paypal_order_id and paypal_order_id.startswith(SIMULATED_ORDER_PREFIX)):
+            if self._sim_order_amount(paypal_order_id) is None:
+                raise HTTPException(status_code=400, detail=SIM_BAD_ORDER)
+            if not approval_token or not hmac.compare_digest(
+                approval_token.upper(), self._approval_token(paypal_order_id)
+            ):
+                raise HTTPException(status_code=402, detail=SIM_NOT_APPROVED)
+            payer = self.simulator_account()
+            captured_id = self._captured_id(paypal_order_id)
+            capture_id = f"CAP-SIM-{captured_id[-12:]}"
             logger.info(f"Captura simulada: {paypal_order_id} → {capture_id}")
             return {
-                "id": paypal_order_id,
+                "id": captured_id,
                 "status": "COMPLETED",
                 "capture_id": capture_id,
-                "payer": {"payer_id": "SANDBOX-SIM", "email_address": "test@fashionstore.local"},
+                "payer": payer,
                 "gateway_reference": f"PAYPAL:{capture_id}",
                 "simulated": True,
             }
@@ -255,9 +326,18 @@ class PayPalService:
         Se usa en el checkout para no registrar como pagado un pedido solo porque el cliente
         envió un ID de orden. Lanza HTTPException si el pago no es válido.
         """
-        if self.is_simulation():
-            if not paypal_order_id.startswith(SIMULATED_ORDER_PREFIX):
-                raise HTTPException(status_code=400, detail="Orden de PayPal no válida.")
+        if self.is_simulation() or (paypal_order_id and paypal_order_id.startswith(SIMULATED_ORDER_PREFIX)):
+            # Mismas reglas que con PayPal real: la orden debe existir, estar cobrada y cubrir el monto.
+            m = _SIM_CAPTURED_RE.fullmatch(paypal_order_id or "")
+            if not m:
+                if self._sim_order_amount(paypal_order_id) is not None:
+                    raise HTTPException(status_code=402, detail="El pago de PayPal no está completado.")
+                raise HTTPException(status_code=400, detail=SIM_BAD_ORDER)
+            paid_usd = self._sim_order_amount(m.group(1))
+            if paid_usd is None or not hmac.compare_digest(paypal_order_id, self._captured_id(m.group(1))):
+                raise HTTPException(status_code=400, detail=SIM_BAD_ORDER)
+            if paid_usd + 0.01 < self.bob_to_usd(expected_amount_bob):
+                raise HTTPException(status_code=402, detail="El monto pagado en PayPal no cubre el total del pedido.")
             return
 
         try:

@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../paquete_seguridad_usuarios/auth_service.dart';
+import '../paquete_catalogo_y_tiendas/catalog_api.dart';
+import '../paquete_catalogo_y_tiendas/product_detail_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -41,10 +43,11 @@ class _ChatbotViewState extends State<ChatbotView> {
   String? _sessionToken;
 
   final List<String> _quickPrompts = [
-    '¿Qué prendas de lino tienen para clima cálido?',
-    'Recomiéndame un outfit elegante para la noche',
-    '¿Cómo combinar una blusa blanca?',
-    '¿Dónde puedo recoger mis reservas?',
+    '¿Qué blusas elegantes tienen?',
+    'Recomiéndame un outfit para fiesta',
+    '¿Qué prendas de lino tienen?',
+    '¿Cuáles son sus sucursales?',
+    '¿Cómo funciona el envío a domicilio?',
   ];
 
   @override
@@ -52,12 +55,13 @@ class _ChatbotViewState extends State<ChatbotView> {
     super.initState();
     _messages.add(
       _ChatMessage(
-        text: '¡Hola! Soy tu asistente de moda y estilo de FashionStore 👗✨. ¿En qué ocasión o prenda estás pensando hoy?',
+        text: '¡Hola! 👋 Soy tu estilista y asistente inteligente de FashionStore 👗✨. ¿En qué prenda, ocasión o estilo estás pensando hoy?',
         isUser: false,
         suggestedActions: [
-          'Ver vestidos de fiesta',
+          'Ver vestidos',
+          'Ver blusas',
           'Rastrear un paquete',
-          'Consultar horarios de sucursales',
+          'Sucursales y horarios',
         ],
       ),
     );
@@ -93,7 +97,7 @@ class _ChatbotViewState extends State<ChatbotView> {
         url,
         headers: {
           if (token != null) 'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json; charset=UTF-8',
         },
         body: jsonEncode({
           'message': query,
@@ -120,7 +124,7 @@ class _ChatbotViewState extends State<ChatbotView> {
       } else {
         setState(() {
           _messages.add(_ChatMessage(
-            text: 'Disculpa, ocurrió un inconveniente al procesar tu consulta. Intenta de nuevo en unos momentos.',
+            text: 'Disculpa, ocurrió un inconveniente temporal (Código ${res.statusCode}). Por favor intenta con otra pregunta.',
             isUser: false,
           ));
           _isSending = false;
@@ -129,7 +133,7 @@ class _ChatbotViewState extends State<ChatbotView> {
     } catch (e) {
       setState(() {
         _messages.add(_ChatMessage(
-          text: 'No fue posible conectar con el asistente de IA. Revisa tu conexión a internet.',
+          text: 'No fue posible conectar con el servidor (${AuthService.apiBaseUrl}). Verifica que el backend esté activo en la misma red Wi-Fi.',
           isUser: false,
         ));
         _isSending = false;
@@ -144,6 +148,9 @@ class _ChatbotViewState extends State<ChatbotView> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F6F4),
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        foregroundColor: _ink,
         title: const Row(
           children: [
             CircleAvatar(
@@ -155,7 +162,7 @@ class _ChatbotViewState extends State<ChatbotView> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Asistente FashionStore', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: _ink)),
+                Text('Estilista FashionStore', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: _ink)),
                 Text('Consejero IA en tiempo real', style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.w500)),
               ],
             ),
@@ -205,7 +212,7 @@ class _ChatbotViewState extends State<ChatbotView> {
                 children: [
                   SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: _brand, strokeWidth: 2)),
                   SizedBox(width: 8),
-                  Text('FashionStore IA está escribiendo...', style: TextStyle(fontSize: 12, color: _muted, fontStyle: FontStyle.italic)),
+                  Text('FashionStore IA está buscando las mejores prendas...', style: TextStyle(fontSize: 12, color: _muted, fontStyle: FontStyle.italic)),
                 ],
               ),
             ),
@@ -225,7 +232,7 @@ class _ChatbotViewState extends State<ChatbotView> {
                       controller: _msgCtrl,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: const InputDecoration(
-                        hintText: 'Pregúntame sobre tallas, vestidos o estilos...',
+                        hintText: 'Pregúntame sobre blusas, vestidos, envíos o tallas...',
                         hintStyle: TextStyle(fontSize: 13, color: _muted),
                         isDense: true,
                         contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -254,7 +261,7 @@ class _ChatbotViewState extends State<ChatbotView> {
       alignment: m.isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.88),
         child: Column(
           crossAxisAlignment: m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
@@ -270,7 +277,7 @@ class _ChatbotViewState extends State<ChatbotView> {
                 ),
                 border: m.isUser ? null : Border.all(color: const Color(0xFFECE6E2)),
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 6, offset: const Offset(0, 2)),
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 6, offset: const Offset(0, 2)),
                 ],
               ),
               child: Text(
@@ -306,34 +313,89 @@ class _ChatbotViewState extends State<ChatbotView> {
               ),
             ],
 
-            // Prendas sugeridas por la IA
+            // Prendas sugeridas por la IA con imágenes y acceso directo al producto
             if (m.suggestedProducts != null && m.suggestedProducts!.isNotEmpty) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               SizedBox(
-                height: 110,
+                height: 165,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: m.suggestedProducts!.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  separatorBuilder: (_, __) => const SizedBox(width: 10),
                   itemBuilder: (context, i) {
                     final p = m.suggestedProducts![i];
-                    return Container(
-                      width: 140,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFECE6E2)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(p['name'] ?? 'Prenda', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _ink)),
-                          const SizedBox(height: 2),
-                          Text('Bs. ${p['base_price'] ?? '0'}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _brand)),
-                          const Spacer(),
-                          Text(p['category_name'] ?? 'Moda', style: const TextStyle(fontSize: 10, color: _muted)),
-                        ],
+                    final imgUrl = p['image_url'] as String?;
+                    final price = (p['price'] ?? p['base_price'] ?? 0);
+                    return InkWell(
+                      onTap: () {
+                        if (p['id'] != null) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ProductDetailView(productId: p['id'] as int),
+                            ),
+                          );
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        width: 130,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFECE6E2)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.03),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ClipRRect(
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+                              child: SizedBox(
+                                height: 95,
+                                width: double.infinity,
+                                child: imgUrl != null && imgUrl.isNotEmpty
+                                    ? Image.network(
+                                        CatalogApi.resolveImage(imgUrl),
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Container(
+                                          color: const Color(0xFFF6E3DD),
+                                          child: const Icon(Icons.broken_image_outlined, color: _muted, size: 28),
+                                        ),
+                                      )
+                                    : Container(
+                                        color: const Color(0xFFF6E3DD),
+                                        child: const Icon(Icons.checkroom, color: _brand, size: 28),
+                                      ),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    p['name'] ?? 'Prenda',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: _ink),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Bs. ${price is num ? price.toStringAsFixed(2) : price.toString()}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _brand),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },

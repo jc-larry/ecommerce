@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
+import 'paypal_simulator_page.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -43,10 +46,19 @@ class PayPalException implements Exception {
 ///      con su cuenta (sandbox: cuenta "Personal" de pruebas) y aprueba.
 ///   3. PayPal redirige a `.../checkout/success` → la app lo detecta y pide al backend
 ///      POST /payments/paypal/capture-order. El Secret nunca llega al teléfono.
-/// Sin credenciales en el backend, la orden es simulada y se avisa que no hay cobro.
+/// Con el simulador activo en el backend (por defecto), la orden es simulada y se aprueba en
+/// [PayPalSimulatorPage] iniciando sesión con la cuenta del simulador; luego se captura igual.
 class PayPalCheckout {
   static const Duration _timeout = Duration(seconds: 20);
   static const double defaultExchangeRate = 6.96;
+
+  /// webview_flutter solo existe en Android, iOS y macOS; en Windows, Linux o web la ventana
+  /// embebida no se puede crear y PayPal se abre en el navegador del sistema.
+  static bool get supportsEmbeddedWindow =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   static Future<Map<String, String>> _headers() async {
     final token = await AuthService.getToken();
@@ -77,6 +89,19 @@ class PayPalCheckout {
       }
     } catch (_) {}
     return defaultExchangeRate;
+  }
+
+  /// Comprobante a partir de la respuesta de `/capture-order`. Su `id` es el que el backend
+  /// verifica luego en el checkout y en las reservas.
+  static PayPalPaymentResult _resultFromCapture(Map<String, dynamic> cap, String orderId) {
+    final payer = (cap['payer'] as Map?) ?? const {};
+    return PayPalPaymentResult(
+      orderId: cap['id']?.toString() ?? orderId,
+      gatewayReference: cap['gateway_reference']?.toString() ?? 'PAYPAL:$orderId',
+      payerId: payer['payer_id']?.toString(),
+      payerEmail: payer['email_address']?.toString(),
+      simulated: cap['simulated'] == true,
+    );
   }
 
   /// Ejecuta el cobro completo por PayPal. Devuelve null si el cliente cancela.
@@ -113,20 +138,30 @@ class PayPalCheckout {
     final approveUrl = order['approve_url']?.toString();
     final amountUsd = (order['amount_usd'] as num?)?.toDouble() ?? 0;
 
-    // 2. Aprobación del comprador.
-    bool? approved;
+    // Simulador: la ventana tipo PayPal hace login, aprobación y cobro, y devuelve la captura.
     if (simulated) {
-      approved = await navigator.push<bool>(MaterialPageRoute(
-        builder: (_) => _SimulatedApprovalPage(amountBob: amountBob, amountUsd: amountUsd),
+      final cap = await navigator.push<Map<String, dynamic>>(MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => PayPalSimulatorPage(
+          orderId: orderId,
+          amountUsd: amountUsd,
+          amountBob: amountBob,
+          description: description,
+        ),
       ));
-    } else {
-      if (approveUrl == null || approveUrl.isEmpty) {
-        throw const PayPalException('PayPal no devolvió el enlace de aprobación.');
-      }
-      approved = await navigator.push<bool>(MaterialPageRoute(
-        builder: (_) => PayPalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd),
-      ));
+      if (cap == null) return null;
+      return _resultFromCapture(cap, orderId);
     }
+
+    // 2. Aprobación del comprador en PayPal real.
+    if (approveUrl == null || approveUrl.isEmpty) {
+      throw const PayPalException('PayPal no devolvió el enlace de aprobación.');
+    }
+    final approved = await navigator.push<bool>(MaterialPageRoute(
+      builder: (_) => supportsEmbeddedWindow
+          ? PayPalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd)
+          : _ExternalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd),
+    ));
     if (approved != true) return null;
 
     // 3. Captura de los fondos (lado servidor).
@@ -139,17 +174,12 @@ class PayPalCheckout {
           )
           .timeout(_timeout);
       if (r.statusCode != 200) {
-        throw PayPalException(_detail(r, 'PayPal no confirmó el pago. No se realizó ningún cobro.'));
+        throw PayPalException(_detail(
+          r,
+          'PayPal no confirmó el pago. Si no terminaste de aprobarlo en PayPal, vuelve a intentarlo.',
+        ));
       }
-      final cap = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
-      final payer = (cap['payer'] as Map?) ?? const {};
-      return PayPalPaymentResult(
-        orderId: cap['id']?.toString() ?? orderId,
-        gatewayReference: cap['gateway_reference']?.toString() ?? 'PAYPAL:$orderId',
-        payerId: payer['payer_id']?.toString(),
-        payerEmail: payer['email_address']?.toString(),
-        simulated: cap['simulated'] == true,
-      );
+      return _resultFromCapture(jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>, orderId);
     } on PayPalException {
       rethrow;
     } catch (_) {
@@ -173,6 +203,7 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
   late final WebViewController _controller;
   int _progress = 0;
   bool _finished = false;
+  bool _loadError = false;
 
   /// El backend configura return_url = .../checkout/success y cancel_url = .../checkout/cancel.
   bool _handleUrl(String url) {
@@ -206,6 +237,10 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
         onProgress: (p) {
           if (mounted) setState(() => _progress = p);
         },
+        onWebResourceError: (err) {
+          // Solo la página principal: los recursos secundarios de PayPal fallan a menudo sin importar.
+          if (err.isForMainFrame == true && mounted && !_finished) setState(() => _loadError = true);
+        },
       ))
       ..loadRequest(Uri.parse(widget.approveUrl));
   }
@@ -233,52 +268,99 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
                 )
               : null,
         ),
-        body: WebViewWidget(controller: _controller),
+        body: _loadError
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.wifi_off, size: 48, color: _muted),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'No se pudo cargar PayPal. Revisa tu conexión a internet.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _ink),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () {
+                          setState(() => _loadError = false);
+                          _controller.loadRequest(Uri.parse(widget.approveUrl));
+                        },
+                        child: const Text('Reintentar'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : WebViewWidget(controller: _controller),
       ),
     );
   }
 }
 
-/// Aprobación simulada: solo cuando el backend no tiene credenciales de PayPal.
-/// Lo dice explícitamente para no confundirla con un cobro real.
-class _SimulatedApprovalPage extends StatelessWidget {
-  final double amountBob;
+/// PayPal en el navegador del sistema (plataformas sin ventana embebida).
+/// El navegador no avisa a la app al terminar, así que el cliente confirma con un botón y
+/// el backend captura: si no aprobó en PayPal, la captura falla y no se cobra nada.
+class _ExternalApprovalPage extends StatefulWidget {
+  final String approveUrl;
   final double amountUsd;
-  const _SimulatedApprovalPage({required this.amountBob, required this.amountUsd});
+  const _ExternalApprovalPage({required this.approveUrl, required this.amountUsd});
+
+  @override
+  State<_ExternalApprovalPage> createState() => _ExternalApprovalPageState();
+}
+
+class _ExternalApprovalPageState extends State<_ExternalApprovalPage> {
+  bool _opened = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _open();
+  }
+
+  Future<void> _open() async {
+    bool ok = false;
+    try {
+      ok = await launchUrl(Uri.parse(widget.approveUrl), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _opened = ok);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir el navegador para PayPal.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFFCFBFA),
       appBar: AppBar(
-        title: const Text('PayPal (simulación)', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        foregroundColor: _paypalBlue,
         leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context, false)),
+        title: Text('PayPal · \$${widget.amountUsd.toStringAsFixed(2)} USD',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: const Text(
-                'Modo simulación: el servidor no tiene credenciales de PayPal configuradas. '
-                'No se contacta a PayPal ni se realiza ningún cobro.',
-                style: TextStyle(fontSize: 13, color: _ink),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text('Pagar a', style: TextStyle(color: _muted, fontSize: 12)),
-            const Text('FashionStore Bolivia', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: _ink)),
+            const Icon(Icons.open_in_browser, size: 56, color: _paypalBlue),
             const SizedBox(height: 16),
-            Text('\$${amountUsd.toStringAsFixed(2)} USD',
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: _paypalBlue)),
-            Text('≈ Bs. ${amountBob.toStringAsFixed(2)}', style: const TextStyle(color: _muted)),
+            Text(
+              _opened
+                  ? 'Se abrió PayPal en tu navegador. Inicia sesión con tu cuenta, aprueba el pago '
+                      'y luego vuelve aquí y toca "Ya aprobé el pago".'
+                  : 'Abriendo PayPal en tu navegador…',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: _ink, height: 1.4),
+            ),
             const Spacer(),
             SizedBox(
               height: 50,
@@ -289,9 +371,11 @@ class _SimulatedApprovalPage extends StatelessWidget {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
                 ),
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Aprobar pago simulado', style: TextStyle(fontWeight: FontWeight.bold)),
+                child: const Text('Ya aprobé el pago', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: _open, child: const Text('Abrir PayPal de nuevo')),
             TextButton(
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancelar', style: TextStyle(color: _brand)),

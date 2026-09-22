@@ -3,6 +3,8 @@ import pytest
 from datetime import date, timedelta, datetime, timezone
 from fastapi.testclient import TestClient
 
+from app.config import settings
+from app.packages.paquete_ventas_y_pagos.paypal_service import paypal_service
 from app.main import app
 from app.db.session import SessionLocal
 from app.packages.paquete_seguridad_usuarios.models import User, SessionToken
@@ -12,6 +14,21 @@ from app.packages.paquete_catalogo_y_tiendas.models import ProductVariant, Produ
 from app.packages.paquete_inventario_y_proveedores.merchandise.models import Inventory
 
 client = TestClient(app)
+
+
+def _approve_sim(paypal_order_id, headers):
+    """Inicia sesión en el simulador de PayPal y aprueba la orden (como el comprador)."""
+    res = client.post(
+        "/api/v1/payments/paypal/simulator/approve",
+        json={
+            "paypal_order_id": paypal_order_id,
+            "email": settings.PAYPAL_SIM_EMAIL,
+            "password": settings.PAYPAL_SIM_PASSWORD,
+        },
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
 
 
 @pytest.fixture
@@ -68,10 +85,10 @@ def test_paypal_status():
 
 def test_paypal_create_and_capture_order(auth_headers):
     """Verifica la creación de orden y captura de pago en PayPal."""
-    # 1. Crear Orden en PayPal
+    # 1. Crear Orden en PayPal (usando simulación para ejecución sin interacción manual de navegador)
     create_res = client.post(
         "/api/v1/payments/paypal/create-order",
-        json={"amount_bob": 348.0, "description": "Compra de Vestido y Blusa"},
+        json={"amount_bob": 348.0, "description": "Compra de Vestido y Blusa", "force_simulation": True},
         headers=auth_headers,
     )
     assert create_res.status_code == 200
@@ -83,16 +100,49 @@ def test_paypal_create_and_capture_order(auth_headers):
 
     paypal_order_id = order_data["id"]
 
-    # 2. Capturar Pago en PayPal
-    capture_res = client.post(
+    # 2. Sin aprobación del comprador no se captura nada.
+    early = client.post(
         "/api/v1/payments/paypal/capture-order",
         json={"paypal_order_id": paypal_order_id},
+        headers=auth_headers,
+    )
+    assert early.status_code == 402
+
+    # 3. El comprador inicia sesión en el simulador y aprueba.
+    approval = _approve_sim(paypal_order_id, auth_headers)
+
+    # 4. Capturar Pago en PayPal. El simulador no guarda estado en memoria: la aprobación
+    #    sigue valiendo aunque el servidor se haya reiniciado entre ambos pasos.
+    paypal_service.__init__()
+    capture_res = client.post(
+        "/api/v1/payments/paypal/capture-order",
+        json={"paypal_order_id": paypal_order_id, "approval_token": approval["approval_token"]},
         headers=auth_headers,
     )
     assert capture_res.status_code == 200
     cap_data = capture_res.json()
     assert cap_data["status"] == "COMPLETED"
     assert "gateway_reference" in cap_data
+    assert cap_data["payer"]["email_address"] == settings.PAYPAL_SIM_EMAIL
+
+
+def test_paypal_simulator_login(auth_headers):
+    """El simulador acepta solo la cuenta configurada (correo insensible a mayúsculas)."""
+    ok = client.post(
+        "/api/v1/payments/paypal/simulator/login",
+        json={"email": settings.PAYPAL_SIM_EMAIL.upper(), "password": settings.PAYPAL_SIM_PASSWORD},
+        headers=auth_headers,
+    )
+    assert ok.status_code == 200
+    assert ok.json()["payer"]["email_address"] == settings.PAYPAL_SIM_EMAIL
+    assert "password" not in ok.text.lower()
+
+    bad = client.post(
+        "/api/v1/payments/paypal/simulator/login",
+        json={"email": settings.PAYPAL_SIM_EMAIL, "password": "incorrecta"},
+        headers=auth_headers,
+    )
+    assert bad.status_code == 401
 
 
 def test_cu26_reserva_con_pago_online_paypal(auth_headers):
@@ -136,10 +186,25 @@ def test_cu26_reserva_con_pago_online_paypal(auth_headers):
 
     order = client.post(
         "/api/v1/payments/paypal/create-order",
-        json={"amount_bob": 500.0, "description": "Seña reserva"},
+        json={"amount_bob": 500.0, "description": "Seña reserva", "force_simulation": True},
         headers=auth_headers,
     ).json()
     reference = f"PAYPAL:{order['id']}"
+    # Orden creada pero no pagada: tampoco aparta prendas.
+    unpaid = client.post("/api/v1/reservations", json={**base_payload, "payment_reference": reference}, headers=auth_headers)
+    assert unpaid.status_code == 402
+    approval = _approve_sim(order["id"], auth_headers)
+    cap = client.post(
+        "/api/v1/payments/paypal/capture-order",
+        json={"paypal_order_id": order["id"], "approval_token": approval["approval_token"]},
+        headers=auth_headers,
+    )
+    assert cap.status_code == 200
+    reference = f"PAYPAL:{cap.json()['id']}"
+    # Un comprobante de captura adulterado no aparta prendas.
+    forged_ref = reference[:-1] + ("0" if reference[-1] != "0" else "1")
+    forged = client.post("/api/v1/reservations", json={**base_payload, "payment_reference": forged_ref}, headers=auth_headers)
+    assert forged.status_code == 400
     res = client.post("/api/v1/reservations", json={**base_payload, "payment_reference": reference}, headers=auth_headers)
     assert res.status_code == 201
     data = res.json()

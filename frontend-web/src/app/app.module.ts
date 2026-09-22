@@ -30,6 +30,7 @@ import { CashShiftComponent } from './packages/paquete_ventas_y_pagos/cash-shift
 import { QuotationsReturnsComponent } from './packages/paquete_ventas_y_pagos/quotations-returns/quotations-returns.component';
 import { CustomerOrdersComponent } from './packages/paquete_ventas_y_pagos/orders/customer-orders.component';
 import { CartModalComponent } from './packages/paquete_ventas_y_pagos/cart/cart-modal.component';
+import { PayPalSimulatorComponent } from './packages/paquete_ventas_y_pagos/paypal-simulator/paypal-simulator.component';
 import { SupplierPortalComponent } from './packages/paquete_inventario_y_proveedores/supplier-portal/supplier-portal.component';
 import { SupplierRequestsComponent } from './packages/paquete_inventario_y_proveedores/supplier-requests/supplier-requests.component';
 import { AuthInterceptor } from './packages/paquete_seguridad_usuarios/auth.interceptor';
@@ -76,6 +77,7 @@ import { NotificationsDropdownComponent } from './packages/paquete_notificacione
     QuotationsReturnsComponent,
     CustomerOrdersComponent,
     CartModalComponent,
+    PayPalSimulatorComponent,
     SupplierPortalComponent,
     SupplierRequestsComponent,
     // Ciclo 3

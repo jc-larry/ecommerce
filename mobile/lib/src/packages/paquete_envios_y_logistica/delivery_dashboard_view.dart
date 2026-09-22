@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../paquete_seguridad_usuarios/auth_service.dart';
-import '../paquete_paquete_catalogo_y_tiendas/store_shell.dart';
+import '../paquete_catalogo_y_tiendas/store_shell.dart';
+import 'package:latlong2/latlong.dart';
+import 'location_picker_view.dart';
 
 const _brand = Color(0xFFC66F5C);
 const _ink = Color(0xFF2B1F1D);
@@ -117,10 +119,22 @@ class _DeliveryDashboardViewState extends State<DeliveryDashboardView> with Sing
       final res = await http.post(url, headers: {'Authorization': 'Bearer $token'});
       if (!mounted) return;
       if (res.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(backgroundColor: Colors.green, content: Text('¡Has tomado el pedido! Ya está en tus entregas activas.')),
+        final claimed = Map<String, dynamic>.from(
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map,
         );
-        _loadAll();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.green,
+            content: Text(
+              claimed['delivery_latitude'] != null &&
+                      claimed['delivery_longitude'] != null
+                  ? '¡Pedido tomado! El punto exacto del cliente ya está visible en Mis Entregas.'
+                  : '¡Pedido tomado! Revisa la dirección de entrega en Mis Entregas.',
+            ),
+          ),
+        );
+        await _loadAll();
+        if (mounted) _tabController.animateTo(1);
       } else {
         final err = jsonDecode(utf8.decode(res.bodyBytes));
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${err['detail'] ?? 'No se pudo tomar'}')));
@@ -477,8 +491,57 @@ class _DeliveryDashboardViewState extends State<DeliveryDashboardView> with Sing
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text('Dirección: ${s['delivery_address']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  if (s['origin_branch_name'] != null) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.store, size: 18, color: _brand),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Recoger en: ${s['origin_branch_name']}\n${s['origin_branch_address'] ?? 'Dirección de sucursal no registrada'}',
+                            style: const TextStyle(fontSize: 12, color: _ink),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  Text('Entregar en: ${s['delivery_address']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                   Text('Cliente: ${s['recipient_name']} (Tel: ${s['recipient_phone']})', style: const TextStyle(fontSize: 12, color: _muted)),
+                  if (s['delivery_latitude'] != null && s['delivery_longitude'] != null) ...[
+                    const SizedBox(height: 8),
+                    const Row(
+                      children: [
+                        Icon(Icons.location_on, size: 17, color: _brand),
+                        SizedBox(width: 5),
+                        Text(
+                          'Punto exacto marcado por el cliente',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _brand),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    DeliveryPointPreview(
+                      point: LatLng((s['delivery_latitude'] as num).toDouble(), (s['delivery_longitude'] as num).toDouble()),
+                      height: 140,
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange.shade200),
+                      ),
+                      child: const Text(
+                        'Este pedido antiguo no tiene un punto marcado en el mapa. Usa la dirección escrita y confirma el destino con el cliente.',
+                        style: TextStyle(fontSize: 12, color: _ink),
+                      ),
+                    ),
+                  ],
                   const Divider(height: 16),
                   const Text('Actualizar estado de entrega:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _ink)),
                   const SizedBox(height: 8),

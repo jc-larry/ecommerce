@@ -368,3 +368,66 @@
 <!-- Asistente Virtual / Chatbot IA: exclusivo para clientes y visitantes de la tienda -->
 <app-chatbot-widget *ngIf="!(authService.isLoggedIn() && (authService.isAdminUser() || authService.isProveedorUser() || authService.isRepartidorUser()))"></app-chatbot-widget>
 
+<!-- ============================================================= -->
+<!-- MODAL DE DIÁLOGO Y VALIDACIONES PERSONALIZADO (FASHIONSTORE)  -->
+<!-- ============================================================= -->
+<ng-container *ngIf="dialogService.dialogState$ | async as dialog">
+  <div *ngIf="dialog.isOpen" class="modal fade show d-block" tabindex="-1"
+       style="background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px); z-index: 99999;"
+       role="dialog" aria-modal="true">
+    <div class="modal-dialog modal-dialog-centered" style="max-width: 440px;">
+      <div class="modal-content rounded-4 border-0 shadow-lg p-4 bg-white text-center">
+        
+        <!-- Ícono temático según el tipo de validación -->
+        <div class="mx-auto mb-3 rounded-circle d-flex align-items-center justify-content-center shadow-sm"
+             [ngStyle]="{
+               'width': '64px',
+               'height': '64px',
+               'background-color': dialog.config.type === 'danger' ? '#FEE2E2' : 
+                                   dialog.config.type === 'warning' ? '#FEF3C7' : 
+                                   dialog.config.type === 'success' ? '#D1FAE5' : '#DBEAFE'
+             }">
+          <i class="bi fs-2"
+             [ngClass]="{
+               'bi-shield-x text-danger': dialog.config.type === 'danger',
+               'bi-exclamation-triangle-fill text-warning': dialog.config.type === 'warning',
+               'bi-check-circle-fill text-success': dialog.config.type === 'success',
+               'bi-info-circle-fill text-primary': dialog.config.type === 'info' || !dialog.config.type
+             }"></i>
+        </div>
+
+        <!-- Título -->
+        <h5 class="fw-bold text-dark mb-2" style="letter-spacing: -0.2px;">
+          {{ dialog.config.title || 'Notificación del Sistema' }}
+        </h5>
+
+        <!-- Mensaje -->
+        <p class="text-muted small mb-4 px-2" style="line-height: 1.6; font-size: 0.925rem;">
+          {{ dialog.config.message }}
+        </p>
+
+        <!-- Botones de Acción -->
+        <div *ngIf="dialog.config.isConfirm" class="d-flex gap-2 justify-content-center">
+          <button type="button" class="btn btn-outline-secondary rounded-pill px-4 py-2 fw-semibold flex-grow-1"
+                  (click)="dialogService.handleAction(false)">
+            {{ dialog.config.cancelText || 'Cancelar' }}
+          </button>
+          <button type="button" class="btn rounded-pill px-4 py-2 fw-semibold flex-grow-1 shadow-sm"
+                  [ngClass]="dialog.config.type === 'danger' ? 'btn-danger' : 'btn-primary'"
+                  (click)="dialogService.handleAction(true)">
+            {{ dialog.config.confirmText || 'Confirmar' }}
+          </button>
+        </div>
+
+        <div *ngIf="!dialog.config.isConfirm" class="d-grid">
+          <button type="button" class="btn btn-dark rounded-pill py-2.5 px-4 fw-semibold shadow-sm"
+                  (click)="dialogService.handleAction(true)">
+            {{ dialog.config.confirmText || 'Entendido' }}
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</ng-container>
+

@@ -70,6 +70,10 @@ class ShipmentCreate(BaseModel):
     carrier_name: str = Field(default="Moto Express SCZ", max_length=100)
     carrier_phone: Optional[str] = Field(None, max_length=20)
     delivery_address: str = Field(..., max_length=255)
+    # Coordenadas exactas elegidas por el cliente. También se aceptan al crear
+    # manualmente un despacho para no degradar el mapa del repartidor.
+    delivery_latitude: Optional[float] = Field(None, ge=-90, le=90)
+    delivery_longitude: Optional[float] = Field(None, ge=-180, le=180)
     recipient_name: str = Field(..., max_length=100)
     recipient_phone: str = Field(..., max_length=20)
     shipping_cost: float = Field(default=0.0, ge=0)
@@ -91,6 +95,8 @@ class ShipmentResponse(BaseModel):
     carrier_name: str
     carrier_phone: Optional[str] = None
     delivery_address: str
+    delivery_latitude: Optional[float] = None
+    delivery_longitude: Optional[float] = None
     recipient_name: str
     recipient_phone: str
     shipping_cost: float

@@ -1,16 +1,20 @@
 import { Component, OnInit, OnDestroy, ViewChild, ElementRef } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 import {
   AnaliticaService,
   VirtualTryonResult,
   TryonSession,
   TryonItem,
   VTONGenerateResult,
-  RemoveBackgroundResult
+  RemoveBackgroundResult,
+  GarmentRig
 } from '../analitica.service';
+import { LiveGarmentEngine, PoseSmoother } from './live-garment-engine';
 import { CatalogoService, Product, ProductVariant } from '../../paquete_catalogo_y_tiendas/catalogo.service';
 import { ReservasService } from '../../paquete_reservas_y_citas/reservas.service';
 import { VentasService } from '../../paquete_ventas_y_pagos/ventas.service';
+import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 
 /** Datos de los modelos reales del vestidor */
 export interface RealModel {
@@ -35,6 +39,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
   @ViewChild('videoPlayer') videoPlayer?: ElementRef<HTMLVideoElement>;
   @ViewChild('captureCanvas') captureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('mirrorStage') mirrorStage?: ElementRef<HTMLDivElement>;
+  @ViewChild('garmentOverlay') garmentOverlay?: ElementRef<HTMLCanvasElement>;
 
   // Sesión formal de vestidor (CU32)
   sessionToken: string = '';
@@ -65,12 +70,43 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
   private mediaStream: MediaStream | null = null;
 
   // Rastreo y anclaje continuo de prenda sobre video en vivo (Pose/Torso Tracking)
-  trackedOffsetX: number = 0;
-  trackedOffsetY: number = 0;
-  trackedScale: number = 1.0;
   isTrackingActive: boolean = true;
+  /** Vista en espejo: es como la clienta espera verse frente a un probador. */
+  mirrorView: boolean = true;
+  /** El antebrazo que pasa por delante del torso tapa la prenda. */
+  occludeForearms: boolean = true;
+  /** Estado del rig para poder avisar en pantalla mientras se mide la prenda. */
+  rigStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
+  liveFps: number = 0;
   private trackingAnimationFrameId: number | null = null;
-  private trackingCanvas: HTMLCanvasElement | null = null;
+  private poseLandmarker: PoseLandmarker | null = null;
+  private poseInitPromise: Promise<void> | null = null;
+  private lastVideoTime: number = -1;
+  private lastFrameStamp: number = 0;
+  /** Ultima pose confiable: evita que una perdida breve de MediaPipe borre la prenda. */
+  private lastReliableLandmarks: any[] | null = null;
+  private lastReliablePoseAt: number = 0;
+  private readonly poseHoldMs = 1000;
+  private readonly poseFadeMs = 350;
+
+  // Motor de colocacion en vivo: deforma el recorte de la prenda sobre los landmarks de
+  // pose en cada fotograma, sin llamar al servidor.
+  private liveEngine = new LiveGarmentEngine();
+  private poseSmoother = new PoseSmoother();
+  private garmentRig: GarmentRig | null = null;
+  private garmentRigKey: string = '';
+  private rigRequest: Subscription | null = null;
+  /** Silueta de la persona; recorta la prenda para que no se salga del cuerpo. */
+  private maskCanvas: HTMLCanvasElement | null = null;
+  private maskUpdatedAt = 0;
+  private readonly maskHoldMs = 750;
+
+  // Delegado de MediaPipe en uso y sonda de respaldo (ver `watchPoseHealth`).
+  private poseDelegate: 'GPU' | 'CPU' = 'GPU';
+  private emptyPoseStreak = 0;
+  private cpuProbe: PoseLandmarker | null = null;
+  private cpuProbeBusy = false;
+  private lastCpuProbeAt = 0;
 
   // Controles de superposición interactiva AR
   overlayScale: number = 1.0;
@@ -82,7 +118,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
   showLandmarks: boolean = true;
 
   // Motor de Inteligencia Artificial (IDM-VTON / Difusión)
-  selectedAIModel: 'IDM-VTON' | 'FASHN_AI' = 'FASHN_AI';
+  selectedAIModel: 'IDM-VTON' | 'FASHN_AI' = 'IDM-VTON';
   isGeneratingVTON: boolean = false;
   vtonResult: VTONGenerateResult | null = null;
   activeViewMode: 'ar' | 'vton' | 'split' = 'ar';
@@ -192,6 +228,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopWebcam();
+    this.rigRequest?.unsubscribe();
   }
 
   // 1. Inicialización y trazabilidad de sesión (CU32)
@@ -318,6 +355,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
 
     // Registrar automáticamente la prueba de la prenda en la sesión activa
     this.recordTestedItem();
+    this.loadGarmentForCamera();
     this.runSimulation();
   }
 
@@ -330,6 +368,8 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
       this.vtonResult = null;
       this.activeViewMode = 'ar';
       this.recordTestedItem();
+      // El color cambia la foto de la prenda, así que hay que volver a medirla.
+      this.loadGarmentForCamera();
     }
   }
 
@@ -413,12 +453,14 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
               ? `Silueta y postura detectadas: máscara ${maskPercent}%, pose ${posePercent}%. Ajuste anatómico activado.`
               : `Detección parcial: máscara ${maskPercent}%, pose ${posePercent}%. Se aplicará un ajuste conservador para evitar que la prenda salga del cuerpo.`;
             this.runSimulation();
+            this.generatePhotorealisticVTON();
           },
           error: () => {
             // Fallback: usar imagen original sin segmentar
             this.uploadedPhotoUrl = rawImageUrl;
             this.isRemovingBg = false;
             this.runSimulation();
+            this.generatePhotorealisticVTON();
           }
         });
       };
@@ -452,6 +494,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
           height: { ideal: 1080 }
         }
       });
+      await this.ensurePoseLandmarker();
       this.isCameraActive = true;
       setTimeout(() => {
         if (this.videoPlayer && this.videoPlayer.nativeElement) {
@@ -467,79 +510,342 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Bucle del probador en vivo: una detección de pose por fotograma de vídeo y un
+   * repintado de la prenda deformada sobre el cuerpo. Todo ocurre en el navegador; no hay
+   * ninguna llamada al servidor dentro de este bucle.
+   */
   startLiveVideoTracking(): void {
     if (this.trackingAnimationFrameId !== null) {
       cancelAnimationFrame(this.trackingAnimationFrameId);
     }
-    if (!this.trackingCanvas) {
-      this.trackingCanvas = document.createElement('canvas');
-      this.trackingCanvas.width = 160;
-      this.trackingCanvas.height = 120;
-    }
-    const tCtx = this.trackingCanvas.getContext('2d', { willReadFrequently: true });
-    if (!tCtx) return;
-
-    let prevCx = 0.50;
-    let prevCy = 0.38;
-
     const trackLoop = () => {
       if (!this.isCameraActive || !this.videoPlayer?.nativeElement) {
         return;
       }
       const video = this.videoPlayer.nativeElement;
-      if (video.readyState >= 2 && !video.paused && !video.ended) {
-        tCtx.drawImage(video, 0, 0, 160, 120);
-        const imgData = tCtx.getImageData(0, 0, 160, 120).data;
-
-        let sumX = 0;
-        let sumY = 0;
-        let count = 0;
-        let minX = 160;
-        let maxX = 0;
-
-        for (let y = 15; y < 105; y += 3) {
-          for (let x = 20; x < 140; x += 3) {
-            const idx = (y * 160 + x) * 4;
-            const r = imgData[idx];
-            const g = imgData[idx + 1];
-            const b = imgData[idx + 2];
-
-            const isSkin = (r > 60 && g > 40 && b > 20 && r > g && r > b && (r - g) > 10 && (r - b) > 15);
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-            const isBody = isSkin || (lum > 30 && lum < 220);
-
-            if (isBody) {
-              sumX += x;
-              sumY += y;
-              count++;
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-            }
-          }
+      if (video.readyState >= 2 && video.currentTime !== this.lastVideoTime && this.poseLandmarker) {
+        this.lastVideoTime = video.currentTime;
+        const now = performance.now();
+        if (this.lastFrameStamp) {
+          const instant = 1000 / Math.max(1, now - this.lastFrameStamp);
+          this.liveFps = Math.round(this.liveFps * 0.9 + instant * 0.1);
         }
+        this.lastFrameStamp = now;
 
-        if (count > 80 && this.isTrackingActive) {
-          const rawCx = (sumX / count) / 160;
-          const rawCy = (sumY / count) / 120;
-          const bodyWidth = (maxX - minX) / 160;
-
-          // Suavizado temporal exponencial (EMA) para anclaje estable sin sacudidas
-          prevCx = prevCx * 0.82 + rawCx * 0.18;
-          prevCy = prevCy * 0.82 + rawCy * 0.18;
-
-          const targetOffsetX = (prevCx - 0.50) * 320;
-          const targetOffsetY = (prevCy - 0.38) * 220;
-          const targetScale = Math.min(1.35, Math.max(0.75, bodyWidth / 0.52));
-
-          this.trackedOffsetX = this.trackedOffsetX * 0.84 + targetOffsetX * 0.16;
-          this.trackedOffsetY = this.trackedOffsetY * 0.84 + targetOffsetY * 0.16;
-          this.trackedScale = this.trackedScale * 0.88 + targetScale * 0.12;
+        try {
+          const result = this.poseLandmarker.detectForVideo(video, now);
+          this.watchPoseHealth(video, (result?.landmarks?.length ?? 0) > 0, now);
+          this.renderTrackedOrHeldPose(video, result, now);
+        } catch (error) {
+          // Un fallo aislado del detector no debe detener requestAnimationFrame ni hacer
+          // desaparecer la prenda. El siguiente fotograma intentara recuperar la pose.
+          console.warn('MediaPipe no pudo procesar un fotograma; se conserva la ultima pose.', error);
+          this.renderTrackedOrHeldPose(video, null, now);
         }
       }
       this.trackingAnimationFrameId = requestAnimationFrame(trackLoop);
     };
 
     this.trackingAnimationFrameId = requestAnimationFrame(trackLoop);
+  }
+
+  /**
+   * Usa la pose nueva cuando es completa. Si MediaPipe pierde uno o varios fotogramas,
+   * conserva la ultima pose durante 750 ms y luego desvanece suavemente durante 350 ms.
+   * Asi no hay parpadeo por motion blur, pero tampoco queda una prenda congelada si la
+   * persona abandona la camara.
+   */
+  private renderTrackedOrHeldPose(video: HTMLVideoElement, result: any, now: number): void {
+    if (!this.isTrackingActive) {
+      this.lastReliableLandmarks = null;
+      this.closeSegmentationMasks(result);
+      this.clearGarmentCanvas();
+      return;
+    }
+
+    this.liveEngine.setVideoAspect(video.videoWidth / Math.max(1, video.videoHeight));
+    if (result?.landmarks?.length > 0) {
+      const smoothed = this.poseSmoother.smooth(result.landmarks[0], now);
+      if (this.liveEngine.hasUsableBody(smoothed)) {
+        this.lastReliableLandmarks = smoothed.map(point => ({ ...point }));
+        this.lastReliablePoseAt = now;
+        this.paintLiveFrame(video, smoothed, result);
+        return;
+      }
+    }
+
+    const ageMs = now - this.lastReliablePoseAt;
+    const maxGraceMs = this.poseHoldMs + this.poseFadeMs;
+    if (this.lastReliableLandmarks && ageMs <= maxGraceMs) {
+      const opacityFactor = ageMs <= this.poseHoldMs
+        ? 1
+        : Math.max(0, 1 - (ageMs - this.poseHoldMs) / this.poseFadeMs);
+      this.paintLiveFrame(video, this.lastReliableLandmarks, result, opacityFactor);
+      return;
+    }
+
+    this.lastReliableLandmarks = null;
+    this.lastReliablePoseAt = 0;
+    this.poseSmoother.reset();
+    this.closeSegmentationMasks(result);
+    this.clearGarmentCanvas();
+  }
+
+  /** Coloca la prenda del fotograma actual sobre el cuerpo detectado. */
+  private paintLiveFrame(
+    video: HTMLVideoElement,
+    landmarks: any[],
+    result: any,
+    opacityFactor: number = 1,
+  ): void {
+    const canvas = this.garmentOverlay?.nativeElement;
+    const stage = this.mirrorStage?.nativeElement;
+    if (!canvas || !stage) return;
+
+    const width = stage.clientWidth;
+    const height = stage.clientHeight;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // El vídeo va en `object-fit: contain`, así que hay bandas a los lados o arriba: los
+    // landmarks vienen en fracciones del vídeo, no del lienzo, y hay que mapearlos.
+    const videoScale = Math.min(width / video.videoWidth, height / video.videoHeight);
+    const drawWidth = video.videoWidth * videoScale;
+    const drawHeight = video.videoHeight * videoScale;
+
+    this.liveEngine.render(
+      ctx,
+      landmarks,
+      {
+        offsetX: (width - drawWidth) / 2,
+        offsetY: (height - drawHeight) / 2,
+        drawWidth,
+        drawHeight,
+      },
+      {
+        scale: this.fitScaleFactor,
+        offsetX: this.overlayOffsetX,
+        offsetY: this.overlayOffsetY,
+        opacity: this.overlayOpacity * opacityFactor,
+        occludeForearms: this.occludeForearms,
+      },
+      video,
+      this.pickMask(result, landmarks, video),
+    );
+
+    // Las máscaras de MediaPipe retienen memoria de GPU hasta que se cierran: sin esto se
+    // acumularía una por fotograma y el probador acabaría ahogando la pestaña.
+    this.closeSegmentationMasks(result);
+  }
+
+  /**
+   * Silueta para recortar la prenda: la de este fotograma si es fiable; si no, la última
+   * buena durante `maskHoldMs`; pasado ese tiempo, ninguna (mejor sin recorte que sin prenda).
+   */
+  private pickMask(result: any, landmarks: any[], video: HTMLVideoElement): HTMLCanvasElement | null {
+    const aspect = video.videoWidth / Math.max(1, video.videoHeight);
+    const fresh = this.buildMaskCanvas(result, landmarks, aspect);
+    const now = performance.now();
+    if (fresh) {
+      this.maskUpdatedAt = now;
+      return fresh;
+    }
+    return this.maskCanvas && now - this.maskUpdatedAt <= this.maskHoldMs ? this.maskCanvas : null;
+  }
+
+  private closeSegmentationMasks(result: any): void {
+    for (const mask of (result?.segmentationMasks ?? [])) mask.close?.();
+  }
+
+  /**
+   * Convierte la máscara de segmentación de MediaPipe en un lienzo utilizable.
+   *
+   * Recortar la prenda contra la silueta es lo que evita que se vea flotando por fuera del
+   * cuerpo cuando el seguimiento titubea o la persona se gira de perfil.
+   */
+  private buildMaskCanvas(result: any, landmarks: any[], aspect: number): HTMLCanvasElement | null {
+    const masks = result?.segmentationMasks;
+    if (!masks || masks.length === 0) return null;
+    const mask = masks[0];
+    const values: Float32Array | undefined = mask.getAsFloat32Array?.();
+    if (!values) return null;
+
+    // Una máscara vacía o parcial recortaría la prenda entera: si no cubre el torso se
+    // descarta sin tocar la última buena, que sigue en `maskCanvas`.
+    if (!LiveGarmentEngine.maskCoversTorso(values, mask.width, mask.height, landmarks, aspect)) {
+      return null;
+    }
+
+    if (!this.maskCanvas) this.maskCanvas = document.createElement('canvas');
+    const canvas = this.maskCanvas;
+    if (canvas.width !== mask.width || canvas.height !== mask.height) {
+      canvas.width = mask.width;
+      canvas.height = mask.height;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const image = ctx.createImageData(mask.width, mask.height);
+    for (let i = 0; i < values.length; i++) {
+      image.data[i * 4 + 3] = values[i] > 0.5 ? 255 : 0;
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas;
+  }
+
+  /** Crea un detector de pose con el modelo local y los umbrales del plan (0.55). */
+  private async createPoseLandmarker(delegate: 'GPU' | 'CPU'): Promise<PoseLandmarker> {
+    const vision = await FilesetResolver.forVisionTasks('/assets/mediapipe/wasm');
+    return PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: '/assets/mediapipe/pose_landmarker_lite.task',
+        delegate
+      },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      // La mascara de silueta recorta la prenda contra el cuerpo.
+      outputSegmentationMasks: true,
+      minPoseDetectionConfidence: 0.40,
+      minPosePresenceConfidence: 0.40,
+      minTrackingConfidence: 0.40
+    });
+  }
+
+  private readStoredDelegate(): 'GPU' | 'CPU' | null {
+    try {
+      const value = sessionStorage.getItem('tryon_pose_delegate');
+      return value === 'CPU' || value === 'GPU' ? value : null;
+    } catch { return null; }
+  }
+
+  private storeDelegate(delegate: 'GPU' | 'CPU'): void {
+    try { sessionStorage.setItem('tryon_pose_delegate', delegate); } catch { /* sin almacenamiento */ }
+  }
+
+  /**
+   * Vigila que el delegado GPU no falle en silencio.
+   *
+   * Hay equipos donde la GPU se crea sin error pero nunca devuelve una pose: la prenda no
+   * aparece jamas y no hay nada que capturar. Si llevamos ~2 s sin pose, se prueba el mismo
+   * fotograma en un detector CPU; si este si ve a la persona, se cambia a CPU de forma
+   * permanente. Si tampoco ve a nadie, es que no hay nadie delante y no se hace nada.
+   */
+  private watchPoseHealth(video: HTMLVideoElement, hasPose: boolean, now: number): void {
+    if (hasPose) {
+      this.emptyPoseStreak = 0;
+      if (this.cpuProbe) { this.cpuProbe.close(); this.cpuProbe = null; }
+      return;
+    }
+    this.emptyPoseStreak++;
+    if (this.poseDelegate !== 'GPU' || this.emptyPoseStreak < 60 || this.cpuProbeBusy) return;
+    if (now - this.lastCpuProbeAt < 4000) return;
+
+    this.cpuProbeBusy = true;
+    this.lastCpuProbeAt = now;
+    (async () => {
+      try {
+        if (!this.cpuProbe) this.cpuProbe = await this.createPoseLandmarker('CPU');
+        const result = this.cpuProbe.detectForVideo(video, performance.now());
+        const found = (result?.landmarks?.length ?? 0) > 0;
+        this.closeSegmentationMasks(result);
+        if (found) {
+          console.warn('La GPU de MediaPipe no detecta pero la CPU si: se cambia a CPU.');
+          this.poseLandmarker?.close();
+          this.poseLandmarker = this.cpuProbe;
+          this.cpuProbe = null;
+          this.poseDelegate = 'CPU';
+          this.storeDelegate('CPU');
+          this.poseSmoother.reset();
+        }
+      } catch (error) {
+        console.warn('No se pudo probar el respaldo CPU de MediaPipe.', error);
+      } finally {
+        this.cpuProbeBusy = false;
+      }
+    })();
+  }
+
+  private async ensurePoseLandmarker(): Promise<void> {
+    if (this.poseLandmarker) return;
+    if (this.poseInitPromise) return this.poseInitPromise;
+    this.poseInitPromise = (async () => {
+      // Si en una sesion anterior la GPU resulto no funcionar, se arranca directo en CPU.
+      const preferred: 'GPU' | 'CPU' = this.readStoredDelegate() ?? 'GPU';
+      try {
+        this.poseLandmarker = await this.createPoseLandmarker(preferred);
+        this.poseDelegate = preferred;
+      } catch (gpuError) {
+        console.warn('MediaPipe GPU no disponible; se activa el delegado CPU.', gpuError);
+        this.poseLandmarker = await this.createPoseLandmarker('CPU');
+        this.poseDelegate = 'CPU';
+      }
+    })();
+    try {
+      await this.poseInitPromise;
+    } catch (error) {
+      this.poseInitPromise = null;
+      throw error;
+    }
+  }
+
+  /**
+   * Pide al backend el rig de la prenda seleccionada y carga su recorte.
+   *
+   * El rig trae la prenda ya separada del fondo y **medida**: dónde caen su pecho, su bajo
+   * y sus mangas. Antes esto se resolvía en el navegador volviendo transparente todo lo
+   * casi blanco y anclando a fracciones fijas de la imagen, lo que fallaba en los dos
+   * casos más comunes del catálogo (prenda blanca sobre fondo blanco, y fotos con mucho
+   * aire alrededor). Se pide una vez por prenda y el servidor lo tiene cacheado.
+   */
+  private loadGarmentForCamera(): void {
+    const product = this.selectedProduct;
+    if (!product) return;
+
+    // Las prendas multicolor traen una galería por color: se mide la foto del color
+    // elegido, no la primera de la lista, o el recorte no correspondería a lo que se ve.
+    const images = product.images || [];
+    const colorId = this.selectedVariant?.color_id;
+    const forColor = colorId ? images.filter(i => i.color_id === colorId) : [];
+    const pool = forColor.length ? forColor : images;
+    const raw = (pool.find(i => i.is_primary) || pool[0])?.image_url || '';
+    const key = `${product.id}|${raw}`;
+    if (key === this.garmentRigKey) return;
+
+    this.garmentRigKey = key;
+    this.rigStatus = 'loading';
+    this.rigRequest?.unsubscribe();
+    this.rigRequest = this.analiticaService.getGarmentRig(product.id, raw || undefined).subscribe({
+      next: (rig) => {
+        this.garmentRig = rig;
+        const image = new Image();
+        image.crossOrigin = 'anonymous';
+        image.onload = () => {
+          this.liveEngine.setRig(rig as any, image);
+          this.rigStatus = 'ready';
+        };
+        image.onerror = () => {
+          this.liveEngine.setRig(null, null);
+          this.rigStatus = 'failed';
+        };
+        image.src = this.resolveImg(rig.cutout_url);
+      },
+      error: () => {
+        this.garmentRig = null;
+        this.liveEngine.setRig(null, null);
+        this.rigStatus = 'failed';
+      }
+    });
+  }
+
+
+  private clearGarmentCanvas(): void {
+    const canvas = this.garmentOverlay?.nativeElement;
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   }
 
   stopWebcam(): void {
@@ -552,9 +858,17 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
       this.mediaStream = null;
     }
     this.isCameraActive = false;
-    this.trackedOffsetX = 0;
-    this.trackedOffsetY = 0;
-    this.trackedScale = 1.0;
+    this.lastVideoTime = -1;
+    this.lastFrameStamp = 0;
+    this.liveFps = 0;
+    this.lastReliableLandmarks = null;
+    this.lastReliablePoseAt = 0;
+    this.maskCanvas = null;
+    this.maskUpdatedAt = 0;
+    this.emptyPoseStreak = 0;
+    if (this.cpuProbe) { this.cpuProbe.close(); this.cpuProbe = null; }
+    this.clearGarmentCanvas();
+    this.poseSmoother.reset();
   }
 
   captureSnapshot(): void {

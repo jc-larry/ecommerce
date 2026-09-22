@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Búsqueda por voz (CU34): el reconocedor de voz necesita el micrófono -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Espejo virtual en vivo (CU32): la app abre la camara y la mantiene abierta. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Entrega a domicilio (CU29): ubicar al cliente en el mapa del checkout. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <application
         android:label="FashionStore"

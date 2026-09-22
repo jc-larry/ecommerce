@@ -136,6 +136,9 @@
           <h5 class="fw-bold text-dark mb-1">{{ p.name }}</h5>
           <p class="text-muted small mb-2" *ngIf="p.description">{{ p.description }}</p>
           <div class="small text-muted mt-auto pt-2 border-top">
+            <div *ngIf="p.season">
+              <i class="bi bi-calendar3-range text-success me-1"></i> Temporada: <strong>{{ p.season.name }}</strong>
+            </div>
             <div *ngIf="p.category">
               <i class="bi bi-tag text-primary me-1"></i> Categoría: <strong>{{ p.category.name }}</strong>
             </div>
@@ -224,14 +227,21 @@
           <input type="text" class="form-control" [(ngModel)]="newPromo.name" placeholder="Nombre">
         </div>
         <div class="row g-2 mb-3">
-          <div class="col-6">
+          <div class="col-4">
             <label class="form-label small fw-bold">Descuento (%)</label>
             <input type="number" class="form-control" [(ngModel)]="newPromo.discount_percent">
           </div>
-          <div class="col-6">
-            <label class="form-label small fw-bold">Categoría Asociada</label>
+          <div class="col-4">
+            <label class="form-label small fw-bold">Temporada (CU13)</label>
+            <select class="form-select" [(ngModel)]="newPromo.season_id">
+              <option [ngValue]="null">Sin temporada</option>
+              <option *ngFor="let s of seasons" [ngValue]="s.id">{{ s.name }}</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label small fw-bold">Categoría</label>
             <select class="form-select" [(ngModel)]="newPromo.category_id">
-              <option [ngValue]="null">Todas las categorías</option>
+              <option [ngValue]="null">Todas</option>
               <option *ngFor="let c of categories" [ngValue]="c.id">{{ c.name }}</option>
             </select>
           </div>

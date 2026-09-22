@@ -30,6 +30,8 @@ def get_my_notifications(
     current_user: User = Depends(get_current_user),
 ):
     """[CU40] Obtiene las notificaciones del buzón in-app del usuario autenticado."""
+    # [CU40 - Paso 2] / [DSC040 - Paso 2] +get_my_notifications(user_id)
+    # [CU40 - Paso 3] / [DSC040 - Paso 3] +select_in_app_notifications_where(user_id)
     query = db.query(InAppNotification).filter(InAppNotification.user_id == current_user.id)
     if unread_only:
         query = query.filter(InAppNotification.is_read == False)
@@ -42,6 +44,7 @@ def get_my_notifications(
         .count()
     )
 
+    # [CU40 - Paso 4] / [DSC040 - Paso 4] +Retornar bandeja de notificaciones y total no leídas
     return NotificationsSummaryResponse(
         unread_count=unread_count,
         notifications=[
@@ -66,6 +69,8 @@ def get_unread_count(
     current_user: User = Depends(get_current_user),
 ):
     """[CU40] Devuelve el número de notificaciones no leídas para la insignia del navbar."""
+    # [CU40 - Paso 2] / [DSC040 - Paso 2] +get_unread_count(user_id)
+    # [CU40 - Paso 3] / [DSC040 - Paso 3] +count_unread_notifications()
     count = (
         db.query(InAppNotification)
         .filter(InAppNotification.user_id == current_user.id, InAppNotification.is_read == False)
@@ -81,6 +86,8 @@ def mark_notification_read(
     current_user: User = Depends(get_current_user),
 ):
     """[CU40] Marca una notificación específica como leída."""
+    # [CU40 - Paso 5] / [DSC040 - Paso 5] +mark_notification_read(notification_id)
+    # [CU40 - Paso 6] / [DSC040 - Paso 6] +select_notification_by_id()
     notif = (
         db.query(InAppNotification)
         .filter(InAppNotification.id == notification_id, InAppNotification.user_id == current_user.id)
@@ -89,6 +96,7 @@ def mark_notification_read(
     if not notif:
         raise HTTPException(status_code=404, detail="Notificación no encontrada.")
 
+    # [CU40 - Paso 7] / [DSC040 - Paso 7] +update(notification, is_read=True)
     notif.is_read = True
     db.commit()
     db.refresh(notif)
@@ -110,6 +118,8 @@ def mark_all_notifications_read(
     current_user: User = Depends(get_current_user),
 ):
     """[CU40] Marca todas las notificaciones pendientes del usuario como leídas."""
+    # [CU40 - Paso 5] / [DSC040 - Paso 5] +mark_all_notifications_read(user_id)
+    # [CU40 - Paso 6] / [DSC040 - Paso 6] +update_all(is_read=True)
     db.query(InAppNotification).filter(
         InAppNotification.user_id == current_user.id,
         InAppNotification.is_read == False
@@ -124,6 +134,8 @@ def send_email_notification(
     current_user: User = Depends(get_current_user),
 ):
     """[CU40] Envía correo transaccional manual o disparado por eventos."""
+    # [CU40 - Paso 2] / [DSC040 - Paso 2] +send_email_notification(to, subject, body)
+    # [CU40 - Paso 3] / [DSC040 - Paso 3] +dispatch_smtp_email_message()
     success = send_transactional_email(
         to_email=data.to_email,
         subject=data.subject,
