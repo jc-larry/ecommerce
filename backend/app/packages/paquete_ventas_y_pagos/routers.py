@@ -33,6 +33,82 @@ manager_check = RoleChecker(allowed_roles=["SUPERADMIN", "ENCARGADO"])
 
 
 # ===================================================================
+# Diagnóstico PayPal
+# ===================================================================
+
+@router.get("/health/paypal-status")
+async def paypal_status_check():
+    """Diagnóstico de conexión con PayPal y validez de credenciales."""
+    return await paypal_service.check_connection()
+
+
+@router.post("/debug/paypal-test-order")
+async def paypal_test_order_creation(
+    amount_bob: float = 100.0,
+    reference_id: str = "TEST-ORDER-DEBUG",
+):
+    """[DEBUG] Crea una orden de prueba en PayPal y devuelve la respuesta completa.
+
+    Esto te permite ver exactamente qué está rechazando PayPal.
+    Parámetros:
+    - amount_bob: cantidad en Bolivianos (default 100.0)
+    - reference_id: ID de referencia (default TEST-ORDER-DEBUG)
+    """
+    try:
+        result = await paypal_service.create_order(
+            amount_bob=amount_bob,
+            reference_id=reference_id,
+            description=f"Test Order - {reference_id}",
+        )
+        return {
+            "success": True,
+            "order": result,
+            "message": "Orden de prueba creada exitosamente en PayPal",
+        }
+    except HTTPException as e:
+        return {
+            "success": False,
+            "error": e.detail,
+            "status_code": e.status_code,
+            "message": "PayPal rechazó la orden de prueba",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Error inesperado",
+        }
+
+
+@router.post("/paypal/capture-order")
+async def capture_paypal_order(paypal_order_id: str):
+    """Captura una orden de PayPal después de que el usuario la apruebe.
+
+    Se llama desde el frontend cuando vuelve de PayPal (return_url).
+    """
+    try:
+        result = await paypal_service.capture_order(paypal_order_id)
+        return {
+            "success": True,
+            "capture": result,
+            "message": "Orden capturada exitosamente",
+        }
+    except HTTPException as e:
+        return {
+            "success": False,
+            "error": e.detail,
+            "status_code": e.status_code,
+            "message": "PayPal no pudo capturar la orden",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Error inesperado",
+        }
+
+
+# ===================================================================
 # CU17 — Carrito de Compras Digital
 # ===================================================================
 
@@ -277,6 +353,10 @@ def _build_order_response(db: Session, order: Order) -> OrderResponse:
 
     order_num = f"ORD-{order.created_at.year}-{order.id:06d}"
 
+    # Buscar despacho/envío asociado (CU29, CU30)
+    from app.packages.paquete_envios_y_logistica.models import Shipment
+    ship = db.query(Shipment).filter(Shipment.order_id == order.id).first()
+
     return OrderResponse(
         id=order.id,
         order_number=order_num,
@@ -290,6 +370,9 @@ def _build_order_response(db: Session, order: Order) -> OrderResponse:
         items=items_resp,
         payments=payments_resp,
         invoice=inv_resp,
+        tracking_number=ship.tracking_number if ship else None,
+        delivery_address=ship.delivery_address if ship else None,
+        shipping_method="DELIVERY" if ship else ("PICKUP" if order.channel == "ONLINE" else "PRESENCIAL"),
     )
 
 
@@ -509,7 +592,7 @@ def process_checkout(
     )
     db.add(invoice)
 
-    # 8. Si era venta ONLINE, vaciar el carrito y avisar al cliente (CU40)
+    # 8. Si era venta ONLINE, vaciar el carrito, avisar al cliente y generar envío si corresponde (CU29, CU30, CU40)
     if data.channel == "ONLINE":
         cart = db.query(Cart).filter(Cart.user_id == current_user.id).first()
         if cart:
@@ -520,6 +603,46 @@ def process_checkout(
             f"Recibimos tu pago de Bs. {total_amount:.2f} ({p_type}). Tu pedido se preparará en {branch.name}.",
             TIPO_PEDIDO, order.id, "ORDER",
         )
+
+        # Si el método es DELIVERY (o no es retiro en sucursal explícito), se genera la orden de despacho
+        # para que aparezca inmediatamente en la bolsa de pedidos de los repartidores (CU29, CU30)
+        if data.shipping_method != "PICKUP":
+            from app.packages.paquete_envios_y_logistica.models import Shipment, ShipmentTrackingEvent
+            from app.packages.paquete_envios_y_logistica.routers import avisar_envio
+
+            tracking_num = f"TRK-{uuid.uuid4().hex[:8].upper()}"
+            address = (data.delivery_address or "Dirección indicada por el cliente").strip()
+            rec_name = (data.recipient_name or data.customer_name or f"{current_user.first_name} {current_user.last_name}").strip()
+            rec_phone = (data.recipient_phone or current_user.phone or "S/N").strip()
+            cost = float(data.shipping_cost or 15.0)
+
+            shipment = Shipment(
+                tracking_number=tracking_num,
+                order_id=order.id,
+                zone_id=data.zone_id,
+                carrier_name="Moto Express",
+                carrier_phone=None,
+                delivery_address=address,
+                recipient_name=rec_name,
+                recipient_phone=rec_phone,
+                shipping_cost=cost,
+                status="PENDING_DISPATCH",
+                notes=data.delivery_notes.strip() if data.delivery_notes else None,
+            )
+            db.add(shipment)
+            db.flush()
+
+            initial_event = ShipmentTrackingEvent(
+                shipment_id=shipment.id,
+                status="PENDING_DISPATCH",
+                location=f"Sucursal {branch.name}",
+                description=f"Pedido ONLINE con envío a domicilio ({address}). Disponible en bolsa de repartidores.",
+            )
+            db.add(initial_event)
+            try:
+                avisar_envio(db, shipment, "CREADO")
+            except Exception:
+                pass
 
     db.commit()
     db.refresh(order)

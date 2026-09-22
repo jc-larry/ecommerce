@@ -9,6 +9,7 @@ reporta como error: nunca se fabrica un pago aprobado.
 import uuid
 import base64
 import logging
+import json
 from typing import Dict, Any, Optional
 
 import httpx
@@ -17,17 +18,28 @@ from fastapi import HTTPException
 from app.config import settings
 
 logger = logging.getLogger("paypal_service")
+logger.setLevel(logging.DEBUG)
 
 SIMULATED_ORDER_PREFIX = "PAYPAL-SIM-"
 PAYPAL_UNAVAILABLE = "No se pudo procesar el pago con PayPal. Intenta nuevamente en unos minutos."
 
 
 class PayPalService:
-    def __init__(self):
-        self.client_id = settings.PAYPAL_CLIENT_ID
-        self.client_secret = settings.PAYPAL_CLIENT_SECRET
-        self.base_url = settings.paypal_api_base
-        self.exchange_rate = settings.PAYPAL_EXCHANGE_RATE_BOB_USD
+    @property
+    def client_id(self) -> str:
+        return settings.PAYPAL_CLIENT_ID
+
+    @property
+    def client_secret(self) -> str:
+        return settings.PAYPAL_CLIENT_SECRET
+
+    @property
+    def base_url(self) -> str:
+        return settings.paypal_api_base
+
+    @property
+    def exchange_rate(self) -> float:
+        return settings.PAYPAL_EXCHANGE_RATE_BOB_USD
 
     def bob_to_usd(self, amount_bob: float) -> float:
         """Convierte monto en Bolivianos a Dólares Estadounidenses con 2 decimales."""
@@ -49,17 +61,21 @@ class PayPalService:
         """Obtiene token OAuth 2.0 de PayPal. Lanza 502 si PayPal no responde correctamente."""
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
+                logger.debug(f"🔐 Solicitando token OAuth a: {self.base_url}/v1/oauth2/token")
                 resp = await client.post(
                     f"{self.base_url}/v1/oauth2/token",
                     headers=self._basic_auth_header(),
                     data={"grant_type": "client_credentials"},
                 )
         except httpx.HTTPError as exc:
-            logger.error("Error conectando con PayPal OAuth: %s", exc)
+            logger.error("❌ Error conectando con PayPal OAuth: %s", exc)
             raise HTTPException(status_code=502, detail=PAYPAL_UNAVAILABLE)
+
         if resp.status_code != 200:
-            logger.error("PayPal OAuth falló (%s): %s", resp.status_code, resp.text)
-            raise HTTPException(status_code=502, detail=PAYPAL_UNAVAILABLE)
+            logger.error("❌ PayPal OAuth rechazó (%s): %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=502, detail=f"PayPal OAuth error {resp.status_code}")
+
+        logger.debug("✅ Token OAuth obtenido exitosamente")
         return resp.json()["access_token"]
 
     async def check_connection(self) -> Dict[str, Any]:
@@ -84,7 +100,10 @@ class PayPalService:
         description: str = "Pago en FashionStore",
         customer_email: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Crea una orden en PayPal (intent: CAPTURE). Retorna el order_id y approve_url."""
+        """Crea una orden en PayPal (intent: CAPTURE). Retorna el order_id y approve_url.
+
+        En modo simulación: genera una orden ficticia sin conectar a PayPal.
+        """
         amount_usd = self.bob_to_usd(amount_bob)
         base = {
             "amount_bob": amount_bob,
@@ -96,27 +115,61 @@ class PayPalService:
 
         if self.is_simulation():
             sim_id = f"{SIMULATED_ORDER_PREFIX}{uuid.uuid4().hex[:10].upper()}"
-            return {**base, "id": sim_id, "status": "CREATED", "approve_url": None}
+            logger.info(f"Orden simulada creada: {sim_id} (Bs. {amount_bob:.2f} = USD {amount_usd:.2f})")
+            return {**base, "id": sim_id, "status": "CREATED", "approve_url": sim_id}
 
         token = await self.get_access_token()
+
         payload = {
             "intent": "CAPTURE",
             "purchase_units": [
                 {
                     "reference_id": reference_id,
                     "description": description[:120],
-                    "amount": {"currency_code": "USD", "value": f"{amount_usd:.2f}"},
+                    "amount": {
+                        "currency_code": "USD",
+                        "value": f"{amount_usd:.2f}",
+                        "breakdown": {
+                            "item_total": {
+                                "currency_code": "USD",
+                                "value": f"{amount_usd:.2f}"
+                            }
+                        }
+                    },
+                    "items": [
+                        {
+                            "name": description[:120],
+                            "quantity": "1",
+                            "unit_amount": {
+                                "currency_code": "USD",
+                                "value": f"{amount_usd:.2f}"
+                            }
+                        }
+                    ]
                 }
             ],
-            "application_context": {
-                "brand_name": "FashionStore",
-                "user_action": "PAY_NOW",
-                # Retiro/entrega en sucursal: PayPal no debe pedir dirección de envío.
-                "shipping_preference": "NO_SHIPPING",
-                "return_url": f"{settings.FRONTEND_URL}/store/checkout/success",
-                "cancel_url": f"{settings.FRONTEND_URL}/store/checkout/cancel",
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "brand_name": "FashionStore",
+                        "locale": "es-BO",
+                        "user_action": "PAY_NOW",
+                        "shipping_preference": "NO_SHIPPING",
+                        "return_url": f"{settings.FRONTEND_URL}/store/checkout/success",
+                        "cancel_url": f"{settings.FRONTEND_URL}/store/checkout/cancel",
+                    }
+                }
             },
         }
+
+        logger.debug(f"📤 Creando orden en PayPal:")
+        logger.debug(f"   - URL: {self.base_url}/v2/checkout/orders")
+        logger.debug(f"   - Monto: {amount_bob} BOB = {amount_usd} USD")
+        logger.debug(f"   - Reference: {reference_id}")
+        logger.debug(f"   - Return URL: {settings.FRONTEND_URL}/store/checkout/success")
+        logger.debug(f"   - Cancel URL: {settings.FRONTEND_URL}/store/checkout/cancel")
+        logger.debug(f"   - Payload completo: {json.dumps(payload, indent=2)}")
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
@@ -125,28 +178,44 @@ class PayPalService:
                     json=payload,
                 )
         except httpx.HTTPError as exc:
-            logger.error("Excepción en create_order de PayPal: %s", exc)
+            logger.error(f"❌ Excepción en create_order de PayPal: {exc}")
             raise HTTPException(status_code=502, detail=PAYPAL_UNAVAILABLE)
 
         data = resp.json()
-        if resp.status_code not in (200, 201):
-            logger.error("Error creando orden PayPal (%s): %s", resp.status_code, data)
-            raise HTTPException(status_code=502, detail=PAYPAL_UNAVAILABLE)
+        logger.debug(f"📥 Respuesta PayPal ({resp.status_code}): {json.dumps(data, indent=2)}")
 
-        approve_url = next((l.get("href") for l in data.get("links", []) if l.get("rel") == "approve"), None)
+        if resp.status_code not in (200, 201):
+            error_msg = data.get("message", "Error desconocido")
+            error_details = data.get("details", [])
+            error_name = data.get("name", "UNKNOWN_ERROR")
+
+            logger.error(f"❌ PayPal rechazó la orden:")
+            logger.error(f"   - Status: {resp.status_code}")
+            logger.error(f"   - Error Name: {error_name}")
+            logger.error(f"   - Mensaje: {error_msg}")
+            logger.error(f"   - Detalles: {json.dumps(error_details, indent=2)}")
+
+            raise HTTPException(status_code=502, detail=f"PayPal {error_name}: {error_msg}")
+
+        approve_url = next((l.get("href") for l in data.get("links", []) if l.get("rel") in ("approve", "payer-action")), None)
+        logger.info(f"✅ Orden PayPal creada: {data.get('id')} | Approve URL: {approve_url}")
         return {**base, "id": data.get("id"), "status": data.get("status"), "approve_url": approve_url}
 
     async def capture_order(self, paypal_order_id: str) -> Dict[str, Any]:
-        """Captura los fondos de una orden aprobada por el comprador."""
+        """Captura los fondos de una orden aprobada por el comprador.
+
+        En modo simulación: aprueba automáticamente sin conectar a PayPal.
+        """
         if self.is_simulation():
             if not paypal_order_id.startswith(SIMULATED_ORDER_PREFIX):
                 raise HTTPException(status_code=400, detail="Orden de PayPal no válida.")
             capture_id = f"CAP-SIM-{uuid.uuid4().hex[:12].upper()}"
+            logger.info(f"Captura simulada: {paypal_order_id} → {capture_id}")
             return {
                 "id": paypal_order_id,
                 "status": "COMPLETED",
                 "capture_id": capture_id,
-                "payer": {"payer_id": "SANDBOX-SIM", "email_address": None},
+                "payer": {"payer_id": "SANDBOX-SIM", "email_address": "test@fashionstore.local"},
                 "gateway_reference": f"PAYPAL:{capture_id}",
                 "simulated": True,
             }
