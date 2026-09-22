@@ -24,8 +24,20 @@ mobile/.flutter-plugins-dependencies
 mobile/build/
 mobile/.idea/
 
-# ===== Editores / SO =====
+# ===== Editores / SO / Temporales =====
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.log
+~$*
+.pytest_cache/
+
+# ===== Binarios pesados y artefactos de compilación =====
+*.apk
+*.zip
+*.pth
+*.pt
+entrenamiento_ia_ropa/04_checkpoints_modelos/
+paquete_drive_vton/
+mobile/android/.gradle/
