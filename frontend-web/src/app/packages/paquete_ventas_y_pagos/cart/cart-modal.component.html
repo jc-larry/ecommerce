@@ -111,7 +111,37 @@
         <button class="val-close" (click)="errorMessage = ''" title="Cerrar">&times;</button>
       </div>
 
-      <!-- Sucursal de retiro / despacho -->
+            <!-- Modalidad de Entrega (CU18) -->
+      <div class="mb-3">
+        <label class="form-label small fw-bold text-uppercase d-block mb-1">Modalidad de Entrega *</label>
+        <div class="row g-2">
+          <div class="col-6">
+            <button type="button" class="btn btn-sm w-100 border p-2 text-start"
+                    [class.btn-primary]="deliveryType === 'RETIRO_TIENDA'"
+                    [class.btn-light]="deliveryType !== 'RETIRO_TIENDA'"
+                    (click)="deliveryType = 'RETIRO_TIENDA'">
+              <div class="fw-bold"><i class="bi bi-shop me-1"></i> Retiro en Tienda</div>
+              <small class="d-block opacity-75" style="font-size: 0.72rem;">Sin costo &bull; Plazo: 48h</small>
+            </button>
+          </div>
+          <div class="col-6">
+            <button type="button" class="btn btn-sm w-100 border p-2 text-start"
+                    [class.btn-primary]="deliveryType === 'ENVIO_DOMICILIO'"
+                    [class.btn-light]="deliveryType !== 'ENVIO_DOMICILIO'"
+                    (click)="deliveryType = 'ENVIO_DOMICILIO'">
+              <div class="fw-bold"><i class="bi bi-truck me-1"></i> Envio a Domicilio</div>
+              <small class="d-block opacity-75" style="font-size: 0.72rem;">Delivery Express</small>
+            </button>
+          </div>
+        </div>
+
+        <div *ngIf="deliveryType === 'RETIRO_TIENDA'" class="alert alert-info py-2 px-3 small mt-2 mb-0 d-flex align-items-center gap-2">
+          <i class="bi bi-clock-history fs-5"></i>
+          <div><strong>Custodia 48 Horas:</strong> Dispones de 48h tras pagar para recoger tu prenda en sucursal. Vencido el plazo, retorna a stock y se emite Nota de Credito.</div>
+        </div>
+      </div>
+
+<!-- Sucursal de retiro / despacho -->
       <div class="mb-3">
         <label class="form-label small fw-bold">Sucursal de Despacho *</label>
         <select class="form-select form-select-sm" [(ngModel)]="selectedBranchId">
@@ -150,7 +180,12 @@
 
       <!-- Medio de Pago Polimórfico (CU18 / Pasarela) -->
       <div class="mb-3">
-        <label class="form-label small fw-bold text-uppercase d-block mb-1">Pasarela de Pago Online *</label>
+                <!-- Control Timeout de Pasarela (5 minutos) -->
+        <div class="alert alert-warning py-2 px-3 small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-stopwatch fs-5"></i>
+          <div><strong>Sesion de Pago Segura (5 min):</strong> Tienes 5 minutos para completar el cobro. Si expira, las prendas se liberan sin cargo alguno.</div>
+        </div>
+<label class="form-label small fw-bold text-uppercase d-block mb-1">Pasarela de Pago Online *</label>
         <div class="row g-1 mb-2">
           <div class="col-4">
             <button class="btn btn-sm w-100 border text-truncate p-2"

@@ -842,308 +842,421 @@ El análisis de acoplamiento y cohesión está en la §2.4.
 
 ## 2.2 Analizar casos de uso — Diagramas de comunicación
 
-Notación **Mermaid (flowchart)**: Actor · Interfaz (`IU_*`) · Control (`CTR_*`) · Entidad
-(`CE_*`); flechas numeradas en orden cronológico.
+Notación **Mermaid (flowchart LR)**: Actor (`:Actor`) · Interfaz (`<<boundary>> :IU_*`) · Control (`<<control>> :CTR_*`) · Entidad (`<<entity>> :CE_*`) y Servicios Externos (`<<external>>`); flechas numeradas cronológicamente según la interacción real de la arquitectura del sistema.
 
-### CU01: Iniciar Sesión
+### CU01: Iniciar sesión en la plataforma
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Usuario"))
-    IU(["🖥️ IU_Login"])
-    CTR(("⚙️ CTR_Auth"))
-    ENT[("🗄️ CE_Usuario")]
-    ENT_S[("🗄️ CE_Sesion")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +ingresar(email, password)" --> IU
-    IU -- "2: +login(email, password)" --> CTR
-    CTR -- "3: +select_where(email)" --> ENT
-    ENT -. "4: +Datos y Hash" .-> CTR
-    CTR -- "5: +create_token()" --> ENT_S
-    ENT_S -. "6: +Token JWT" .-> CTR
-    CTR -. "7: +Token y roles" .-> IU
-    IU -. "8: +Redirigir según rol (tienda / panel / portal proveedor / portal repartidor)" .-> Actor
+    U(("👤 :Usuario")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Login</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Auth</b>"]:::controlStyle
+    CE_U["&laquo;entity&raquo;<br/><b>:CE_Usuario</b>"]:::entityStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:CE_SessionToken</b>"]:::entityStyle
+
+    U -- "1: ingresar(email, password)" --> IU
+    IU -- "2: login(email, password)" --> CTR
+    CTR -- "3: select_where(lower(email))" --> CE_U
+    CE_U -. "4: Datos y Hash" .-> CTR
+    CTR -- "5: create_token()" --> CE_S
+    CE_S -. "6: Token JWT" .-> CTR
+    CTR -. "7: Token JWT, roles y datos" .-> IU
+    IU -. "8a: /proveedor (web) · aviso 'usa el panel web' (móvil)" .-> U
+    IU -. "8b: /repartidor (web) · panel de entregas (móvil)" .-> U
+    IU -. "8c: /admin/dashboard (web) · aviso 'usa el panel web' (móvil)" .-> U
+    IU -. "8d: /tienda (web) · Inicio de la tienda (móvil)" .-> U
 ```
 
-### CU02: Cerrar Sesión
+### CU02: Cerrar sesión activa
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Usuario Autenticado"))
-    IU(["🖥️ IU_Dashboard"])
-    CTR(("⚙️ CTR_Auth"))
-    ENT[("🗄️ CE_Sesion")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +clicLogout()" --> IU
-    IU -- "2: +logout(token)" --> CTR
-    CTR -- "3: +update_revoked(token)" --> ENT
-    ENT -. "4: +Confirmación" .-> CTR
-    CTR -. "5: +Limpiar credenciales y redirigir" .-> IU
+    U(("👤 :Usuario")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Dashboard</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Auth</b>"]:::controlStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:CE_SessionToken</b>"]:::entityStyle
+    BD["&laquo;entity&raquo;<br/><b>:CE_Bitacora</b>"]:::entityStyle
+
+    U -- "1: clicLogout()" --> IU
+    IU -- "2: logout(token)" --> CTR
+    CTR -- "3: update_revoked(token)" --> CE_S
+    CE_S -. "4: Confirmación" .-> CTR
+    CTR -- "5: insert(LOGOUT)" --> BD
+    BD -. "6: Confirmación" .-> CTR
+    CTR -. "7: Éxito" .-> IU
+    IU -. "8: Limpiar credenciales y redirigir" .-> U
 ```
 
-### CU03: Recuperar Credenciales
+### CU03: Recuperar credenciales de acceso
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Usuario"))
-    IU(["🖥️ IU_Recuperar"])
-    CTR(("⚙️ CTR_Auth"))
-    ENT[("🗄️ CE_Usuario")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +solicitarRecuperacion(email)" --> IU
-    IU -- "2: +recover(email)" --> CTR
-    CTR -- "3: +verificar_email(email)" --> ENT
-    ENT -. "4: +Existe" .-> CTR
-    CTR -- "5: +generar_token() y enviar_enlace_por_correo(SMTP)" --> CTR
-    CTR -. "6: +Aviso: 'revisa tu correo, vence en 5 min'" .-> IU
-    Actor -- "7: +abre el enlace del correo → IU_NuevaClave(token en la URL)" --> IU
-    IU -- "8: +reset_password(token, nueva_clave)" --> CTR
-    CTR -- "9: +update_password(hash) y anular_token" --> ENT
-    ENT -. "10: +Actualizado" .-> CTR
-    CTR -. "11: +Redirigir a Login" .-> IU
+    U(("👤 :Usuario")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Recover</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Auth</b>"]:::controlStyle
+    CE_U["&laquo;entity&raquo;<br/><b>:CE_Usuario</b>"]:::entityStyle
+
+    U -- "1: solicitarRecuperacion(email)" --> IU
+    IU -- "2: recover(email)" --> CTR
+    CTR -- "3: verificar_email(lower(email))" --> CE_U
+    CE_U -. "4: Existe" .-> CTR
+    CTR -- "5: generar_token() + enviar_enlace_por_correo(SMTP)" --> CTR
+    CTR -. "6: Aviso neutro" .-> IU
+    IU -. "7: 'Revisa tu correo, vence en 5 min'" .-> U
+    U -- "8: enviarNuevaClave(token, nueva_clave)" --> IU
+    IU -- "9: reset_password(token, nueva_clave)" --> CTR
+    CTR -- "10: update_password(hash) + anular_token" --> CE_U
+    CE_U -. "11: Actualizado" .-> CTR
+    CTR -. "12: Éxito" .-> IU
+    IU -. "13: Redirigir a Login()" .-> U
 ```
 
-### CU04: Auto-registro de Cliente
+### CU04: Auto-registro de cliente
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Cliente Nuevo"))
-    IU(["📱 IU_Registro"])
-    CTR(("⚙️ CTR_Auth"))
-    ENT[("🗄️ CE_Usuario")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +llenarFormulario(datos)" --> IU
-    IU -- "2: +register(datos)" --> CTR
-    CTR -- "3: +check_exists(email)" --> ENT
-    ENT -. "4: +No existe" .-> CTR
-    CTR -- "5: +insert(datos, rol='CLIENTE')" --> ENT
-    ENT -. "6: +Usuario Creado" .-> CTR
-    CTR -. "7: +Notificar éxito" .-> IU
+    C(("👤 :Cliente Nuevo")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Register</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Auth</b>"]:::controlStyle
+    CE_U["&laquo;entity&raquo;<br/><b>:CE_Usuario</b>"]:::entityStyle
+
+    C -- "1: llenarFormulario(datos)" --> IU
+    IU -- "2: register(datos)" --> CTR
+    CTR -- "3: check_exists(lower(email))" --> CE_U
+    CE_U -. "4: No existe" .-> CTR
+    CTR -- "5: insert(datos, rol='CLIENTE')" --> CE_U
+    CE_U -. "6: Usuario Creado" .-> CTR
+    CTR -. "7: Respuesta 200/201 Created" .-> IU
+    IU -. "8: Notificar éxito y redirigir a login" .-> C
 ```
 
-### CU05: Gestionar perfiles, roles y clientes
+### CU05: Gestionar perfiles, roles y usuarios
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Admin (SUPERADMIN)"))
-    IU(["🖥️ IU_Usuarios"])
-    CTR(("⚙️ CTR_Usuarios"))
-    ENT[("🗄️ CE_Usuario")]
-    ENT_R[("🗄️ CE_Rol")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +crearUsuario(datos, roles)" --> IU
-    IU -- "2: +create_user(datos, roles)" --> CTR
-    CTR -- "3: +insert(datos)" --> ENT
-    ENT -. "4: +ID Usuario" .-> CTR
-    CTR -- "5: +assign_roles(id, roles)" --> ENT_R
-    ENT_R -. "6: +Roles asignados" .-> CTR
-    CTR -- "7: +assign_user_to_branch(id, branch_id) [ENCARGADO/CAJERO]" --> ENT_B[("🗄️ CE_SucursalEmpleado")]
-    ENT_B -. "8: +Asignado (409 si ya hay encargado)" .-> CTR
-    CTR -. "9: +Actualizar lista (con sucursal)" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_UsuariosRoles</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Users</b>"]:::controlStyle
+    CE_U["&laquo;entity&raquo;<br/><b>:CE_Usuario</b>"]:::entityStyle
+
+    A -- "1: crearUsuario(datos, roles)" --> IU
+    IU -- "2: create_user(datos, roles)" --> CTR
+    CTR -- "3: insert(datos)" --> CE_U
+    CE_U -. "4: ID Usuario" .-> CTR
+    CTR -- "5: assign_roles(id, roles)" --> CE_U
+    CE_U -. "6: Roles asignados" .-> CTR
+    CTR -- "6.1: assign_user_to_branch(id, branch_id)" --> CE_U
+    CTR -. "7: Usuario Creado (con branch_name)" .-> IU
+    IU -. "8: Actualizar lista en UI" .-> A
 ```
 
-### CU06: Gestionar sucursales
+### CU06: Gestionar sucursales de la cadena
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Administrador"))
-    IU(["🖥️ IU_Sucursales"])
-    CTR(("⚙️ CTR_Sucursales"))
-    ENT[("🗄️ CE_Sucursal")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +guardarSucursal(datos)" --> IU
-    IU -- "2: +create_branch(datos)" --> CTR
-    CTR -- "3: +insert(datos)" --> ENT
-    ENT -. "4: +Sucursal Creada" .-> CTR
-    CTR -. "5: +Actualizar tabla" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Branches</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Branches</b>"]:::controlStyle
+    CE_B["&laquo;entity&raquo;<br/><b>:CE_Sucursal</b>"]:::entityStyle
+
+    A -- "1: registrar(datos)" --> IU
+    IU -- "2: create_branch(datos)" --> CTR
+    CTR -- "3: check_exists(nombre)" --> CE_B
+    CE_B -. "4: No existe" .-> CTR
+    CTR -- "5: insert_branch(datos)" --> CE_B
+    CE_B -. "6: Sucursal Creada" .-> CTR
+    CTR -. "7: 201 Created" .-> IU
+    IU -. "8: Actualizar lista en UI" .-> A
 ```
 
-### CU07: Gestionar catálogo
+### CU07: Gestionar catálogo de prendas y variantes
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Admin (SUPERADMIN)"))
-    IU(["🖥️ IU_Productos"])
-    CTR(("⚙️ CTR_Catalogo"))
-    ENT_P[("🗄️ CE_Producto")]
-    ENT_V[("🗄️ CE_Variante")]
-    ENT_IMG[("🗄️ CE_ImagenPrenda")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +guardarPrenda(datos, oferta, galería, variantes)" --> IU
-    IU -- "2: +upload_image(archivo)*" --> CTR
-    CTR -- "3: +insert/update(producto, compare_at_price)" --> ENT_P
-    ENT_P -. "4: +Producto ID" .-> CTR
-    CTR -- "5: +reconciliar(galería, color_id, is_primary)" --> ENT_IMG
-    CTR -- "6: +reconciliar(variantes por SKU)" --> ENT_V
-    ENT_V -. "7: +Variantes activas/inactivas" .-> CTR
-    CTR -- "8: +calcular discount_percent" --> CTR
-    CTR -. "9: +Actualizar catálogo" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Products</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Products</b>"]:::controlStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Producto</b>"]:::entityStyle
+    CE_V["&laquo;entity&raquo;<br/><b>:CE_Variante</b>"]:::entityStyle
+
+    A -- "1: registrar(datos, variantes)" --> IU
+    IU -- "2: create_product(datos, variantes)" --> CTR
+    CTR -- "3: insert_product(datos)" --> CE_P
+    CE_P -. "4: ID Producto" .-> CTR
+    CTR -- "5: insert_variants(variantes)" --> CE_V
+    CE_V -. "6: Confirmación" .-> CTR
+    CTR -. "7: Producto Creado" .-> IU
+    IU -. "8: Actualizar UI" .-> A
 ```
 
-### CU08: Gestionar proveedores
+### CU08: Gestionar proveedores de mercadería
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Admin (SUPERADMIN)"))
-    IU(["🖥️ IU_Proveedores"])
-    CTR(("⚙️ CTR_Proveedores"))
-    ENT[("🗄️ CE_Proveedor")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +guardarProveedor(datos)" --> IU
-    IU -- "2: +create_supplier(datos)" --> CTR
-    CTR -- "3: +insert(datos)" --> ENT
-    ENT -. "4: +Proveedor Creado" .-> CTR
-    CTR -. "5: +Confirmación" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Suppliers</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Suppliers</b>"]:::controlStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:CE_Proveedor</b>"]:::entityStyle
+
+    A -- "1: registrar(datos)" --> IU
+    IU -- "2: create_supplier(datos)" --> CTR
+    CTR -- "3: check_exists(nit)" --> CE_S
+    CE_S -. "4: No existe" .-> CTR
+    CTR -- "5: insert_supplier(datos)" --> CE_S
+    CE_S -. "6: Proveedor Creado" .-> CTR
+    CTR -. "7: 201 Created" .-> IU
+    IU -. "8: Actualizar lista en UI" .-> A
 ```
 
-### CU09: Gestionar empleados
+### CU09: Gestionar empleados de sucursal
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Administrador"))
-    IU(["🖥️ IU_Empleados"])
-    CTR(("⚙️ CTR_Empleados"))
-    ENT_E[("🗄️ CE_Empleado")]
-    ENT_S[("🗄️ CE_Sucursal")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +asignar(usuario_id, sucursal_id)" --> IU
-    IU -- "2: +assign_employee(ids)" --> CTR
-    CTR -- "3: +vincular(usuario, sucursal)" --> ENT_E
-    ENT_E -. "4: +Vinculado" .-> CTR
-    CTR -- "5: +actualizar_staff()" --> ENT_S
-    ENT_S -. "6: +OK" .-> CTR
-    CTR -. "7: +Confirmar asignación" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Employees</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Branches</b>"]:::controlStyle
+    CE_B["&laquo;entity&raquo;<br/><b>:CE_Sucursal</b>"]:::entityStyle
+
+    A -- "1: asignarSucursal(empleado, sucursal)" --> IU
+    IU -- "2: assign_employee(sucursal_id, usuario_id)" --> CTR
+    CTR -- "3: check_exists(sucursal_id, usuario_id) + valida rol" --> CE_B
+    CE_B -. "4: Válidos" .-> CTR
+    CTR -- "5: insert_assign(sucursal_id, usuario_id)" --> CE_B
+    CE_B -. "6: Asignación Completada" .-> CTR
+    CTR -. "7: Éxito" .-> IU
+    IU -. "8: Actualizar UI" .-> A
 ```
 
-### CU10: Registrar compras/ingresos
+### CU10: Registrar compras e ingresos de mercadería
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Encargado / Admin"))
-    IU(["🖥️ IU_Ingresos"])
-    CTR(("⚙️ CTR_Inventario"))
-    ENT_I[("🗄️ CE_Ingreso")]
-    ENT_S[("🗄️ CE_Stock")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +registrarIngreso(lote)" --> IU
-    IU -- "2: +register_intake(lote)" --> CTR
-    CTR -- "3: +insert(ingreso, proveedor)" --> ENT_I
-    ENT_I -. "4: +Ingreso ID" .-> CTR
-    CTR -- "5: +incrementar_stock(variantes, cant)" --> ENT_S
-    CTR -- "6: +update_avg_cost(variante, costo_lote)" --> ENT_S
-    ENT_S -. "7: +Stock y costo promedio actualizados" .-> CTR
-    CTR -. "8: +Mostrar éxito" .-> IU
+    E(("👤 :Encargado de Sucursal")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Ingreso_Mercaderia</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:Controlador_Inventario</b>"]:::controlStyle
+    CE_C["&laquo;entity&raquo;<br/><b>:Entidad_Compra_Proveedor</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario_Sucursal</b>"]:::entityStyle
+    CE_K["&laquo;entity&raquo;<br/><b>:Entidad_Kardex_Movimientos</b>"]:::entityStyle
+
+    E -- "1: ingresarLoteMercaderia(proveedor_id, sucursal_id, nro_factura, lista_prendas)" --> IU
+    IU -- "2: registrarIngresoMercaderia(datos_compra)" --> CTR
+    CTR -- "3: validarProveedorYSucursal(proveedor_id, sucursal_id)" --> CTR
+    CTR -- "4: crearCabeceraCompra(proveedor_id, sucursal_id, nro_factura, total_compra)" --> CE_C
+    CE_C -. "5: compra_id = 140" .-> CTR
+    CTR -- "6: registrarDetalleCompra(compra_id, variante_id, cantidad, costo_unitario)" --> CE_C
+    CE_C -. "7: detalle_guardado" .-> CTR
+    CTR -- "8: incrementarStockFisico(sucursal_id, variante_id, cantidad)" --> CE_I
+    CTR -- "9: actualizarCostoPromedioPonderado(variante_id, costo_unitario)" --> CE_I
+    CE_I -. "10: stock_y_costo_actualizados" .-> CTR
+    CTR -- "11: asentarMovimientoKardex(sucursal_id, variante_id, cantidad, tipo='INGRESO_COMPRA', ref='CMP-140')" --> CE_K
+    CE_K -. "12: asiento_kardex_registrado" .-> CTR
+    CTR -. "13: respuestaExitosa(compra_id=140, mensaje='Ingreso de mercadería completado')" .-> IU
+    IU -. "14: mostrarConfirmacion('Stock actualizado y costo promedio recalculado')" .-> E
 ```
 
-### CU11: Consultar catálogo (Público) — grilla y detalle
+### CU11: Consultar catálogo de prendas
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Visitante / Cliente"))
-    IU(["🖥️/📱 IU_Tienda"])
-    IUD(["🖥️/📱 IU_DetallePrenda"])
-    CTR(("⚙️ CTR_Catalogo"))
-    ENT[("🗄️ CE_Producto")]
-    ENT_R[("🗄️ CE_Resena")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +navegar(categoría, texto)" --> IU
-    IU -- "2: +list_products() + ratings_summary()" --> CTR
-    CTR -- "3: +select_active() + avg/count(reseñas)" --> ENT
-    ENT -. "4: +Prendas con foto, oferta y ★ promedio" .-> CTR
-    CTR -. "5: +Renderizar categorías + grilla lookbook" .-> IU
-    Actor -- "6: +abrirPrenda(id)" --> IUD
-    IUD -- "7: +get_product(id) + get_reviews(id)" --> CTR
-    CTR -- "8: +select(producto, variantes, imágenes)" --> ENT
-    CTR -- "9: +select(reseñas del producto)" --> ENT_R
-    CTR -. "10: +Ficha: galería, colores, tallas por color, reseñas" .-> IUD
-    Actor -- "11: +elegirColor(color_id)" --> IUD
-    IUD -. "12: +Recalcular galería y tallas disponibles" .-> IUD
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_StoreHome</b>"]:::boundaryStyle
+    IUD["&laquo;boundary&raquo;<br/><b>:IU_ProductDetail</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Catalogo</b>"]:::controlStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Producto</b>"]:::entityStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Resena</b>"]:::entityStyle
+
+    C -- "1: entrarATienda()" --> IU
+    IU -- "2: list_products() + ratings_summary() + categories()" --> CTR
+    CTR -- "3: select_active() + avg/count(reseñas)" --> CE_P
+    CE_P -. "4: Prendas con foto, oferta y ★ promedio" .-> CTR
+    CTR -. "5: JSON Array" .-> IU
+    IU -. "6: Categorías + grilla lookbook (oferta / ★ / ♥)" .-> C
+    C -- "7: abrirPrenda(id)" --> IUD
+    IUD -- "8: get_product(id) + get_reviews(id)" --> CTR
+    CTR -- "9: select(producto, variantes, imágenes)" --> CE_P
+    CE_P -. "10: Ficha completa" .-> CTR
+    CTR -- "11: select(reseñas del producto)" --> CE_R
+    CE_R -. "12: Reseñas + promedio" .-> CTR
+    CTR -. "13: JSON detalle" .-> IUD
+    IUD -. "14: Galería + color + tallas por color + reseñas" .-> C
+    C -- "15: elegirColor(color_id) → recalcula galería y tallas" --> IUD
 ```
 
-### CU14: Reseñas y favoritos de prendas
+### CU14: Wishlist múltiple / compartible y moderación de reseñas
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Cliente"))
-    IU(["🖥️/📱 IU_DetallePrenda"])
-    IUW(["🖥️/📱 IU_Favoritos"])
-    CTR(("⚙️ CTR_Catalogo"))
-    ENT_R[("🗄️ CE_Resena")]
-    ENT_F[("🗄️ CE_Favorito")]
-    ENT_A[("🗄️ CE_Bitacora")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +publicarResena(rating, comentario)" --> IU
-    IU -- "2: +submit_review(product_id, rating, comment)" --> CTR
-    CTR -- "3: +upsert por (product_id, user_id)" --> ENT_R
-    ENT_R -. "4: +Reseña creada/actualizada + nuevo promedio" .-> CTR
-    CTR -- "5: +log_event(INSERT/UPDATE product_reviews)" --> ENT_A
-    CTR -. "6: +Refrescar reseñas y ★ promedio" .-> IU
-    Actor -- "7: +toggleFavorito(product_id)" --> IU
-    IU -- "8: +add/remove wishlist(product_id)" --> CTR
-    CTR -- "9: +insert/delete (user_id, product_id)" --> ENT_F
-    CTR -- "10: +log_event(favorito)" --> ENT_A
-    CTR -. "11: +♥ actualizado" .-> IU
-    Actor -- "12: +verFavoritos()" --> IUW
-    IUW -- "13: +get_wishlist()" --> CTR
-    CTR -. "14: +Prendas favoritas del usuario" .-> IUW
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_ProductDetail</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Catalogo</b>"]:::controlStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Resena</b>"]:::entityStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:CE_Favorito</b>"]:::entityStyle
+    CE_A["&laquo;entity&raquo;<br/><b>:CE_AuditLog</b>"]:::entityStyle
+
+    C -- "1: publicarResena(rating 1-5, comentario)" --> IU
+    IU -- "2: submit_review(product_id, rating, comment)" --> CTR
+    CTR -- "3: upsert por (product_id, user_id)" --> CE_R
+    CE_R -. "4: Reseña creada/actualizada" .-> CTR
+    CTR -- "5: log_event(INSERT/UPDATE product_reviews)" --> CE_A
+    CTR -- "6: recalcular avg + count" --> CE_R
+    CTR -. "7: Reseñas + ★ promedio actualizados" .-> IU
+    C -- "8: toggleFavorito(product_id)" --> IU
+    IU -- "9: add_to_wishlist / remove_from_wishlist(product_id)" --> CTR
+    CTR -- "10: insert / delete (user_id, product_id)" --> CE_F
+    CE_F -. "11: in_wishlist" .-> CTR
+    CTR -- "12: log_event(favorito)" --> CE_A
+    CTR -. "13: ♥ actualizado" .-> IU
 ```
 
-### CU36: Consultar bitácora de auditoría
+### CU36: Consultar bitácora de auditoría del sistema
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Admin (SUPERADMIN)"))
-    IU(["🖥️ IU_Auditoria"])
-    CTR(("⚙️ CTR_Auditoria"))
-    ENT[("🗄️ CE_Bitacora")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +verLogs()" --> IU
-    IU -- "2: +get_audit_logs()" --> CTR
-    CTR -- "3: +select_all()" --> ENT
-    ENT -. "4: +Registros Inmutables" .-> CTR
-    CTR -. "5: +Mostrar tabla cronológica" .-> IU
+    A(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Audit</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Users</b>"]:::controlStyle
+    CE_A["&laquo;entity&raquo;<br/><b>:CE_AuditLog</b>"]:::entityStyle
+
+    A -- "1: verLogs()" --> IU
+    IU -- "2: get_audit_logs()" --> CTR
+    CTR -- "3: select_all()" --> CE_A
+    CE_A -. "4: Registros inmutables" .-> CTR
+    CTR -. "5: JSON Array" .-> IU
+    IU -. "6: Mostrar tabla cronológica" .-> A
 ```
 
-### CU37: Consultar valoración de inventario (capital invertido)
+### CU37: Consultar valoración de inventario (capital invertido por CPP)
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Admin / Encargado"))
-    IU(["🖥️ IU_Valoracion"])
-    CTR(("⚙️ CTR_Inventario"))
-    ENT_I[("🗄️ CE_Inventario")]
-    ENT_V[("🗄️ CE_Variante")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +consultarValoracion(sucursal?)" --> IU
-    IU -- "2: +get_valuation(branch?)" --> CTR
-    CTR -- "3: +select_inventory(branch?)" --> ENT_I
-    ENT_I -. "4: +stock_actual y avg_cost por variante" .-> CTR
-    CTR -- "5: +join_datos_prenda()" --> ENT_V
-    ENT_V -. "6: +SKU y nombre de prenda" .-> CTR
-    CTR -- "7: +prorratear: valor = stock * avg_cost; capital = Σ valor" --> CTR
-    CTR -. "8: +Capital invertido + detalle" .-> IU
+    A(("👤 :Admin / Encargado")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Valuation</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Inventory</b>"]:::controlStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    CE_V["&laquo;entity&raquo;<br/><b>:CE_Variante</b>"]:::entityStyle
+
+    A -- "1: consultarValoracion(sucursal?)" --> IU
+    IU -- "2: get_valuation(branch?)" --> CTR
+    CTR -- "3: select_inventory(branch?)" --> CE_I
+    CE_I -. "4: [{stock_actual, avg_cost}]" .-> CTR
+    CTR -- "5: join(sku, product_name)" --> CE_V
+    CE_V -. "6: datos de prenda" .-> CTR
+    CTR -. "7: {capital_invertido, items[]}" .-> IU
+    IU -. "8: Mostrar capital invertido + detalle" .-> A
 ```
 
 ### CU38: Gestionar ajustes de inventario (mermas, daños, pérdidas)
 
 ```mermaid
 flowchart LR
-    Actor(("👤 Encargado / Admin"))
-    IU(["🖥️ IU_Ajustes"])
-    CTR(("⚙️ CTR_Inventario"))
-    ENT_S[("🗄️ CE_Stock")]
-    ENT_L[("🗄️ CE_LibroMayor")]
-    ENT_B[("🗄️ CE_Bitacora")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Actor -- "1: +registrarAjuste(sucursal, variante, cant, motivo)" --> IU
-    IU -- "2: +create_adjustment(datos)" --> CTR
-    CTR -- "3: +verificar_stock(sucursal, variante)" --> ENT_S
-    ENT_S -. "4: +stock_actual y avg_cost vigente" .-> CTR
-    CTR -- "5: +ajustar_stock(cant)" --> ENT_S
-    CTR -- "6: +insert_movimiento('AJUSTE', unit_cost = avg_cost)" --> ENT_L
-    ENT_L -. "7: +Movimiento AJU-{id}" .-> CTR
-    CTR -- "8: +insert(INSERT, inventory_ledger)" --> ENT_B
-    CTR -. "9: +Ajuste registrado + stock resultante" .-> IU
+    E(("👤 :Encargado / Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Adjustments</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Inventory</b>"]:::controlStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:CE_Stock</b>"]:::entityStyle
+    CE_L["&laquo;entity&raquo;<br/><b>:CE_LibroMayor</b>"]:::entityStyle
+    BD["&laquo;entity&raquo;<br/><b>:CE_Bitacora</b>"]:::entityStyle
+
+    E -- "1: registrarAjuste(sucursal, variante, cant, motivo, nota)" --> IU
+    IU -- "2: create_adjustment(datos)" --> CTR
+    CTR -- "3: verificar_stock(sucursal, variante)" --> CE_S
+    CE_S -. "4: stock_actual, avg_cost vigente" .-> CTR
+    CTR -- "5: stock_actual += cant" --> CE_S
+    CTR -- "6: insert('AJUSTE', unit_cost = avg_cost, ref = AJU-{id})" --> CE_L
+    CE_L -. "7: OK" .-> CTR
+    CTR -- "8: insert(INSERT, inventory_ledger)" --> BD
+    BD -. "9: OK" .-> CTR
+    CTR -. "10: {reference_id, stock_resultante}" .-> IU
+    IU -. "11: 'Ajuste registrado'" .-> E
 ```
 
 ---

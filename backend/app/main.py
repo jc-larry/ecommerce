@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -137,6 +137,12 @@ _COLUMN_UPGRADES = [
     "ALTER TABLE payments ADD COLUMN IF NOT EXISTS paypal_payer_email VARCHAR(100)",
     # Migraciones para Promociones y Temporadas (CU13)
     "ALTER TABLE seasonal_promotions ADD COLUMN IF NOT EXISTS season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL",
+    # Migraciones para Venta Omnicanal y Cambios/Devoluciones (CU18, CU22)
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_type VARCHAR(20) DEFAULT 'ENVIO_DOMICILIO'",
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_deadline TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_session_expires_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS credit_note_id INTEGER REFERENCES credit_notes(id) ON DELETE SET NULL",
+    "ALTER TABLE order_returns ADD COLUMN IF NOT EXISTS difference_amount NUMERIC(10, 2) DEFAULT 0",
 ]
 
 # Normalización de datos: el correo es único e insensible a mayúsculas. Se pasan a
@@ -157,6 +163,11 @@ try:
         for stmt in _DATA_FIXES:
             conn.execute(text(stmt))
     print("[DB] Tablas creadas/verificadas correctamente en PostgreSQL.")
+    try:
+        from app.db.auto_seed import auto_seed_catalog_if_needed
+        auto_seed_catalog_if_needed(engine)
+    except Exception as _seed_err:
+        print(f"[AUTO-SEED] Error no bloqueante en auto_seed: {_seed_err}")
 except OperationalError as exc:  # pragma: no cover - depende del entorno
     raise RuntimeError(
         "No se pudo conectar a PostgreSQL. Revisa que el servidor esté activo y que "
@@ -207,6 +218,12 @@ app.include_router(merchandise_router)
 # PKG Ventas y Pagos            → CU17 a CU24 (Carrito, Checkout, POS, Facturación, Cotización, Devolución, Arqueo)
 app.include_router(sales_router)
 app.include_router(paypal_router, prefix="/api/v1")
+# [CU19] Alias de ruta directa para Diagrama de Secuencia POS: POST /api/v1/pos/orders
+from app.packages.paquete_ventas_y_pagos.routers import process_checkout
+from app.packages.paquete_ventas_y_pagos.schemas import OrderResponse
+pos_direct_router = APIRouter(prefix="/api/v1/pos", tags=["pos"])
+pos_direct_router.add_api_route("/orders", process_checkout, methods=["POST"], response_model=OrderResponse, status_code=201)
+app.include_router(pos_direct_router)
 # PKG Reservas y Citas          → CU26 (agendar), CU27 (Kanban), CU28 (cancelar/liberar), CU25 (conversión POS)
 app.include_router(reservations_router)
 # PKG Envíos y Logística        → CU29 (despachos), CU30 (tracking), CU31 (zonas y tarifas)

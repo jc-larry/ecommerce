@@ -306,3 +306,227 @@ def test_cu22_order_returns_refund_and_exchange():
     assert mine is not None
     assert mine["order_number"].startswith("ORD-")
     assert mine["items"] and mine["items"][0]["quantity"] == 1
+
+
+def test_cu22_14_days_warranty_and_invoice_lookup():
+    """[CU22] Validacion estricta de garantia de 14 dias (2 semanas) y busqueda por codigo de factura."""
+    headers = get_auth_token()
+    db = SessionLocal()
+    branch = db.query(Branch).first()
+    variant = db.query(ProductVariant).first()
+    b_id = branch.id
+    v_id = variant.id
+
+    inv = db.query(Inventory).filter(Inventory.branch_id == b_id, Inventory.variant_id == v_id).first()
+    if not inv:
+        inv = Inventory(branch_id=b_id, variant_id=v_id, stock_actual=30, avg_cost=50.0)
+        db.add(inv)
+    else:
+        inv.stock_actual = max(inv.stock_actual, 30)
+    db.commit()
+    db.close()
+
+    # 1. Realizar compra con factura
+    client.delete("/api/v1/sales/cart/clear", headers=headers)
+    client.post("/api/v1/sales/cart/items", json={"variant_id": v_id, "quantity": 1}, headers=headers)
+    chk_res = client.post("/api/v1/sales/checkout", json={
+        "channel": "ONLINE",
+        "branch_id": b_id,
+        "payment_type": "TARJETA",
+        "card_payment": {"card_brand": "VISA", "card_last4": "1234"},
+        "doc_type": "FACTURA",
+        "customer_nit": "88776655"
+    }, headers=headers)
+    assert chk_res.status_code == 201
+    order_data = chk_res.json()
+    order_id = order_data["id"]
+    invoice_id = order_data["invoice"]["id"]
+
+    # 2. Consultar factura por codigo
+    lookup_res = client.get(f"/api/v1/sales/invoices/by-code/FAC-{invoice_id:05d}", headers=headers)
+    assert lookup_res.status_code == 200, lookup_res.text
+    info = lookup_res.json()
+    assert info["warranty_valid"] is True
+    assert info["warranty_days_limit"] == 14
+    assert len(info["items"]) == 1
+
+    # 3. Simular que pasaron 16 dias (superando los 14 dias de garantia)
+    db = SessionLocal()
+    from app.packages.paquete_ventas_y_pagos.models import Order
+    ord_obj = db.query(Order).filter(Order.id == order_id).first()
+    ord_obj.created_at = datetime.now(timezone.utc) - timedelta(days=16)
+    db.commit()
+    db.close()
+
+    # Re-consultar factura: debe indicar garantia vencida
+    lookup_res2 = client.get(f"/api/v1/sales/invoices/by-code/FAC-{invoice_id:05d}", headers=headers)
+    assert lookup_res2.status_code == 200
+    assert lookup_res2.json()["warranty_valid"] is False
+    assert lookup_res2.json()["days_since_purchase"] >= 16
+
+    # Intentar devolucion con 16 dias -> DEBE fallar con HTTP 400 por superar 14 dias
+    ret_fail = client.post("/api/v1/sales/returns", json={
+        "order_id": order_id,
+        "return_type": "DEVOLUCION_DINERO",
+        "reason": "Intento de devolucion fuera de plazo",
+        "items": [{"variant_id": v_id, "quantity": 1}]
+    }, headers=headers)
+    assert ret_fail.status_code == 400
+    assert "14 dias" in ret_fail.json()["detail"] or "2 semanas" in ret_fail.json()["detail"]
+
+
+def test_cu22_exchange_model_with_credit_note():
+    """[CU22] Cambio por modelo de menor valor genera automaticamente Nota de Credito (cero efectivo)."""
+    headers = get_auth_token()
+    db = SessionLocal()
+    branch = db.query(Branch).first()
+    b_id = branch.id
+    
+    # Crear o buscar dos variantes con diferente precio
+    from app.packages.paquete_catalogo_y_tiendas.models import Category, Color, Size
+    cat = db.query(Category).first()
+    if not cat:
+        cat = Category(name="Pruebas", is_active=True)
+        db.add(cat)
+        db.commit()
+    color = db.query(Color).first()
+    size = db.query(Size).first()
+
+    # Prenda cara (Bs. 200)
+    p_expensive = Product(name=f"Vestido Seda Noche {uuid.uuid4().hex[:4]}", base_price=200.0, category_id=cat.id, is_active=True)
+    db.add(p_expensive)
+    db.flush()
+    var_exp = ProductVariant(product_id=p_expensive.id, color_id=color.id, size_id=size.id, sku=f"TEST-EXP-{uuid.uuid4().hex[:4]}")
+    db.add(var_exp)
+    db.flush()
+
+    # Prenda economica (Bs. 120)
+    p_cheap = Product(name=f"Falda Basica {uuid.uuid4().hex[:4]}", base_price=120.0, category_id=cat.id, is_active=True)
+    db.add(p_cheap)
+    db.flush()
+    var_cheap = ProductVariant(product_id=p_cheap.id, color_id=color.id, size_id=size.id, sku=f"TEST-CHP-{uuid.uuid4().hex[:4]}")
+    db.add(var_cheap)
+    db.flush()
+
+    # Stock para ambas
+    db.add(Inventory(branch_id=b_id, variant_id=var_exp.id, stock_actual=10, avg_cost=100.0))
+    db.add(Inventory(branch_id=b_id, variant_id=var_cheap.id, stock_actual=10, avg_cost=60.0))
+    db.commit()
+    exp_id = var_exp.id
+    chp_id = var_cheap.id
+    db.close()
+
+    # Comprar la prenda cara
+    client.delete("/api/v1/sales/cart/clear", headers=headers)
+    client.post("/api/v1/sales/cart/items", json={"variant_id": exp_id, "quantity": 1}, headers=headers)
+    chk = client.post("/api/v1/sales/checkout", json={
+        "channel": "ONLINE",
+        "branch_id": b_id,
+        "payment_type": "QR",
+        "qr_payment": {"qr_reference": "QR-EXP-MODEL"},
+        "doc_type": "FACTURA"
+    }, headers=headers)
+    assert chk.status_code == 201
+    order_id = chk.json()["id"]
+
+    # Procesar CAMBIO_MODELO por la prenda mas economica
+    change_res = client.post("/api/v1/sales/returns", json={
+        "order_id": order_id,
+        "return_type": "CAMBIO_MODELO",
+        "reason": "Prefiere un modelo mas sencillo",
+        "items": [
+            {
+                "variant_id": exp_id,
+                "quantity": 1,
+                "replacement_variant_id": chp_id
+            }
+        ]
+    }, headers=headers)
+    assert change_res.status_code == 201, change_res.text
+    ret_data = change_res.json()
+
+    # Verificar que se genero Nota de Credito por saldo a favor (200 - 120 = 80 Bs)
+    assert ret_data["credit_note_code"] is not None
+    assert ret_data["credit_note_code"].startswith("NC-")
+    assert "80.00" in ret_data["price_difference_message"]
+
+    # Consultar mis Notas de Credito (CU22 / Cliente)
+    nc_list_res = client.get("/api/v1/sales/credit-notes/my-credit-notes", headers=headers)
+    assert nc_list_res.status_code == 200
+    my_ncs = nc_list_res.json()
+    assert any(nc["credit_note_code"] == ret_data["credit_note_code"] for nc in my_ncs)
+
+
+def test_cu18_pickup_48h_and_payment_timeout_5m():
+    """[CU18] Modalidad retiro en sucursal con 48h de plazo y timeout de pago de 5 minutos."""
+    headers = get_auth_token()
+    db = SessionLocal()
+    branch = db.query(Branch).first()
+    variant = db.query(ProductVariant).first()
+    b_id = branch.id
+    v_id = variant.id
+
+    inv = db.query(Inventory).filter(Inventory.branch_id == b_id, Inventory.variant_id == v_id).first()
+    if not inv:
+        inv = Inventory(branch_id=b_id, variant_id=v_id, stock_actual=20, avg_cost=50.0)
+        db.add(inv)
+    else:
+        inv.stock_actual = max(inv.stock_actual, 20)
+    db.commit()
+    stock_initial = inv.stock_actual
+    db.close()
+
+    # 1. Compra con Retiro en Sucursal (48h de plazo)
+    client.delete("/api/v1/sales/cart/clear", headers=headers)
+    client.post("/api/v1/sales/cart/items", json={"variant_id": v_id, "quantity": 1}, headers=headers)
+    chk_res = client.post("/api/v1/sales/checkout", json={
+        "channel": "ONLINE",
+        "branch_id": b_id,
+        "delivery_type": "RETIRO_TIENDA",
+        "shipping_method": "PICKUP",
+        "payment_type": "TARJETA",
+        "card_payment": {"card_brand": "MASTERCARD", "card_last4": "5555"},
+        "doc_type": "NOTA_ENTREGA"
+    }, headers=headers)
+    assert chk_res.status_code == 201, chk_res.text
+    order_data = chk_res.json()
+    assert order_data["delivery_type"] == "RETIRO_TIENDA"
+    assert order_data["pickup_deadline"] is not None
+
+    # 2. Test Timeout de Pasarela de Pago (5 Minutos)
+    # Crear orden pendiente de pago y simular que expiro el temporizador
+    db = SessionLocal()
+    from app.packages.paquete_ventas_y_pagos.models import Order, OrderItem
+    user = db.query(User).filter(User.email == "admin@fashionstore.com").first()
+    timeout_order = Order(
+        user_id=user.id,
+        branch_id=b_id,
+        channel="ONLINE",
+        status="PENDIENTE_PAGO",
+        subtotal=100.0,
+        total_amount=100.0,
+        payment_session_expires_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+    )
+    db.add(timeout_order)
+    db.flush()
+    db.add(OrderItem(order_id=timeout_order.id, variant_id=v_id, quantity=1, unit_price=100.0))
+    # Descontamos preventivamente 1 prenda
+    inv_t = db.query(Inventory).filter(Inventory.branch_id == b_id, Inventory.variant_id == v_id).first()
+    stock_with_held = inv_t.stock_actual - 1
+    inv_t.stock_actual = stock_with_held
+    db.commit()
+    t_order_id = timeout_order.id
+    db.close()
+
+    # Ejecutar check de timeout
+    timeout_res = client.post(f"/api/v1/sales/orders/{t_order_id}/check-payment-timeout", headers=headers)
+    assert timeout_res.status_code == 200, timeout_res.text
+    res_data = timeout_res.json()
+    assert res_data["expired"] is True
+    assert res_data["status"] == "CANCELADA_TIMEOUT"
+
+    # Verificar que el stock fue liberado y restaurado
+    db = SessionLocal()
+    inv_after = db.query(Inventory).filter(Inventory.branch_id == b_id, Inventory.variant_id == v_id).first()
+    assert inv_after.stock_actual == stock_with_held + 1
+    db.close()

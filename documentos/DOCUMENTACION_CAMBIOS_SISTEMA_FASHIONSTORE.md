@@ -185,3 +185,42 @@ Permitir a la gerencia de Casa Matriz seleccionar cualquier prenda del catálogo
 ## 7. Conclusión
 
 Con estas adecuaciones, la plataforma **FashionStore** perfecciona su correspondencia arquitectónica con el diseño UML, enriquece sustancialmente la experiencia analítica para la toma de decisiones de inventario y compras, y eleva la robustez contable y transaccional del sistema a los estándares más exigentes de la cátedra de Sistemas de Información II.
+
+
+---
+
+## 8. Revisión Septiembre 2026: Refinamiento de Reglas de Negocio en Ventas (CU18) y Cambios/Devoluciones (CU22)
+
+En atención a los requerimientos operacionales y de experiencia del cliente del negocio de retail de moda, se implementaron reglas de negocio críticas en los paquetes paquete_ventas_y_pagos e paquete_inventario_y_proveedores:
+
+### 8.1. CU22 (Cambios y Devoluciones):
+1. **Garantía Estricta de 14 Días (2 Semanas):**
+   - El plazo reglamentario máximo para cualquier cambio o devolución se fijó en exactamente **14 días calendario** a partir de la fecha de emisión de la orden de compra (created_at).
+   - Si delta_dias > 14, el sistema deniega el trámite con código HTTP 400 Bad Request y advertencia explicativa.
+2. **Búsqueda por Código de Factura:**
+   - Se habilitó el endpoint GET /api/v1/sales/invoices/by-code/{invoice_code} para que el cajero o encargado busque la compra ingresando el número de factura o código de control fiscal, desplegando el desglose de prendas compradas, precios unitarios y el indicador booleano warranty_valid (delta_dias <= 14).
+3. **Subflujos de Cambio por Talla vs. Cambio por Modelo:**
+   - **Cambio por Talla (CAMBIO_TALLA):** El cliente cambia la prenda por el mismo modelo en otra talla disponible. No genera diferencia de costo (diferencia = Bs. 0.00). Se reingresa la talla devuelta al stock de la sucursal y se descuenta la nueva talla.
+   - **Cambio por Modelo (CAMBIO_MODELO):**
+     * *Nuevo modelo más costoso:* Se calcula la diferencia a favor de la tienda (precio_nuevo - precio_antiguo) y se exige su cobro en caja antes de entregar la prenda.
+     * *Nuevo modelo más económico:* Por política financiera de tienda, no se realiza devolución en efectivo; el sistema genera automáticamente una **Nota de Crédito** (CreditNote, código correlativo NC-2026-XXXX) por el saldo a favor para que el cliente lo descuente en su próxima compra.
+   - **Devolución Definitiva (DEVOLUCION_DINERO / DEVOLUCION_NOTA_CREDITO):** Se reingresa el stock a la sucursal y se emite la Nota de Crédito o comprobante de caja correspondiente.
+
+### 8.2. CU18 (Checkout Omnicanal con Timeout de Pasarela y Custodia 48h):
+1. **Modalidad de Entrega con Custodia Máxima de 48 Horas:**
+   - Si el comprador elige **Retiro en Sucursal** (RETIRO_TIENDA), el costo de envío es Bs. 0.00 y se calcula un plazo límite de retiro: pickup_deadline = created_at + 48 horas.
+   - Si el cliente no retira la prenda en 48 horas, se ejecuta el proceso de expiración: la prenda retorna a inventario para exhibición y venta, y se emite una Nota de Crédito para no acumular paquetes en el mostrador.
+2. **Pasarela de Pago con Timeout Estricto de 5 Minutos (300 segundos):**
+   - Al iniciar la sesión de pago digital, la orden se registra en estado PENDIENTE_PAGO con payment_session_expires_at = created_at + 5 minutos y las prendas quedan bloqueadas preventivamente.
+   - Si no se recibe la confirmación de la pasarela dentro de los 300 segundos, la orden pasa a CANCELADA_TIMEOUT, el stock bloqueado se libera de inmediato devolviendo la disponibilidad de la prenda a la tienda, y el sistema despacha una notificación push urgente al comprador notificándole que el tiempo expiró y no se le cobró nada.
+
+### 8.3. Entidades y Esquemas Incorporados:
+- **CreditNote (credit_notes):** id, credit_note_code, user_id, order_id, 
+eturn_id, mount, status, 
+eason, created_at, expires_at.
+- **Columnas añadidas a orders:** delivery_type, pickup_deadline, payment_session_expires_at.
+- **Nuevos endpoints:**
+  * GET /api/v1/sales/invoices/by-code/{invoice_code}: Búsqueda de factura, evaluación de 14 días y desglose de prendas.
+  * POST /api/v1/sales/orders/{id}/check-payment-timeout: Verificación y cancelación por timeout de 5 minutos con liberación de prendas.
+  * POST /api/v1/sales/orders/{id}/expire-uncollected-pickup: Expiración de custodia de 48 horas con reingreso a stock y Nota de Crédito.
+  * GET /api/v1/sales/credit-notes/my-credit-notes: Consulta de notas de crédito vigentes del cliente.

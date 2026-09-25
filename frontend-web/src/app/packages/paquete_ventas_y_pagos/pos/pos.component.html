@@ -755,6 +755,21 @@
           <span>Bs. {{ lastOrderSuccess.total_amount | number:'1.2-2' }}</span>
         </div>
 
+        <!-- [CU19] Desglose de cobro en efectivo y cambio en tiempo real -->
+        <div *ngIf="lastOrderSuccess.payments && lastOrderSuccess.payments.length > 0 && lastOrderSuccess.payments[0].cash_received" class="d-flex justify-content-between text-muted small mt-1">
+          <span>Efectivo Recibido:</span>
+          <span>Bs. {{ lastOrderSuccess.payments[0].cash_received | number:'1.2-2' }}</span>
+        </div>
+        <div *ngIf="lastOrderSuccess.payments && lastOrderSuccess.payments.length > 0 && lastOrderSuccess.payments[0].cash_change !== null && lastOrderSuccess.payments[0].cash_change !== undefined" class="d-flex justify-content-between text-success fw-bold">
+          <span>CAMBIO / VUELTO:</span>
+          <span>Bs. {{ lastOrderSuccess.payments[0].cash_change | number:'1.2-2' }}</span>
+        </div>
+
+        <!-- [CU19 - Retorno IU]: mostrarCambioYConfirmacion(vuelto, gaveta_abierta) -->
+        <div *ngIf="lastOrderSuccess.payments && lastOrderSuccess.payments.length > 0 && lastOrderSuccess.payments[0].cash_change !== null && (lastOrderSuccess.payments[0].cash_change || 0) > 0" class="alert alert-success py-1 px-2 mt-2 mb-1 text-center small">
+          <i class="bi bi-cash-coin me-1"></i> Gaveta abierta — Entregar vuelto de Bs. {{ lastOrderSuccess.payments[0].cash_change | number:'1.2-2' }}
+        </div>
+
         <div *ngIf="lastOrderSuccess.invoice?.control_code" class="mt-2 pt-2 border-top text-center">
           <small class="d-block">CÓDIGO DE CONTROL: {{ lastOrderSuccess.invoice?.control_code }}</small>
           <small class="text-muted" style="font-size: 0.65rem;">"ESTA FACTURA CONTRIBUYE AL DESARROLLO DEL PAÍS"</small>

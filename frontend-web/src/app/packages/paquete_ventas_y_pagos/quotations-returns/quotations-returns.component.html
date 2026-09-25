@@ -320,19 +320,19 @@
     <div class="card border-0 shadow-sm rounded-4 p-4 bg-white mb-4">
       <h4 class="fw-bold mb-1">Recepción de Devolución / Cambio de Prenda</h4>
       <p class="text-muted small mb-4">
-        Ingresa el ID de la orden de venta o factura. El sistema cargará automáticamente las prendas efectivamente compradas y validará la política comercial de <strong>30 días de plazo máximo</strong>.
+        Ingresa el <strong>código de la factura oficial</strong> (ej: FAC-00001, código de control) o ID de orden de venta. El sistema cargará automáticamente las prendas compradas y validará la política comercial de garantía estricta de <strong>14 días (2 semanas)</strong> posteriores a la compra.
       </p>
 
       <!-- PASO 1: BÚSQUEDA Y VALIDACIÓN DE ORDEN -->
       <div class="row g-3 align-items-end mb-4 p-3 bg-light rounded-4">
-        <div class="col-md-5">
-          <label class="form-label small fw-bold">Número / ID de Orden de Venta *</label>
+        <div class="col-md-6">
+          <label class="form-label small fw-bold">Código de Factura Oficial / # de Orden *</label>
           <div class="input-group">
-            <span class="input-group-text bg-white fw-bold">#</span>
-            <input type="number" class="form-control" placeholder="Ej: 1" [(ngModel)]="orderIdToReturn" (keyup.enter)="onSearchOrder()">
-            <button class="btn btn-primary fw-bold" (click)="onSearchOrder()" [disabled]="orderSearchLoading">
+            <span class="input-group-text bg-white fw-bold"><i class="bi bi-receipt"></i></span>
+            <input type="text" class="form-control" placeholder="Ej: FAC-00001, código control o # orden" [(ngModel)]="invoiceSearchQuery" (keyup.enter)="onSearchInvoice()">
+            <button class="btn btn-primary fw-bold" (click)="onSearchInvoice()" [disabled]="orderSearchLoading">
               <span *ngIf="orderSearchLoading" class="spinner-border spinner-border-sm me-1"></span>
-              <i *ngIf="!orderSearchLoading" class="bi bi-search me-1"></i> Buscar Orden
+              <i *ngIf="!orderSearchLoading" class="bi bi-search me-1"></i> Buscar Factura / Orden
             </button>
           </div>
         </div>
@@ -426,11 +426,12 @@
             <label class="form-label small fw-bold">Tipo de Operación *</label>
             <select class="form-select" [(ngModel)]="returnType">
               <option value="DEVOLUCION_DINERO">Devolución de Dinero (Reembolso)</option>
-              <option value="CAMBIO_PRENDA">Cambio de Prenda (Talla / Color)</option>
+              <option value="CAMBIO_TALLA">Cambio por Talla (Mismo Modelo / Sin costo)</option>
+              <option value="CAMBIO_MODELO">Cambio por Modelo (Cobro diferencia / Nota de Crédito)</option>
             </select>
           </div>
 
-          <div class="col-md-6" *ngIf="returnType === 'CAMBIO_PRENDA'">
+          <div class="col-md-6" *ngIf="returnType === 'CAMBIO_PRENDA' || returnType === 'CAMBIO_TALLA' || returnType === 'CAMBIO_MODELO'">
             <label class="form-label small fw-bold text-primary">Prenda de Reemplazo a Entregar al Cliente *</label>
             <select class="form-select" [(ngModel)]="replacementVariantId">
               <option [ngValue]="null">-- Selecciona la prenda a entregar --</option>
@@ -460,6 +461,18 @@
           </div>
         </div>
 
+        
+        <!-- Alertas explicativas de reglas de negocio -->
+        <div *ngIf="returnType === 'CAMBIO_TALLA'" class="alert alert-info py-2 small mb-3 d-flex align-items-center gap-2">
+          <i class="bi bi-info-circle-fill fs-5"></i>
+          <div><strong>Cambio por Talla:</strong> Mismo modelo y precio base. La operación no genera costo adicional (Diferencia: Bs. 0.00).</div>
+        </div>
+
+        <div *ngIf="returnType === 'CAMBIO_MODELO'" class="alert alert-warning py-2 small mb-3 d-flex align-items-center gap-2">
+          <i class="bi bi-wallet2 fs-5"></i>
+          <div><strong>Cambio por Modelo:</strong> Si la nueva prenda supera el precio original, el cliente debe pagar la diferencia. Si es de menor valor, se emite automáticamente una <strong>Nota de Crédito</strong> para su próxima compra (cero devolución en efectivo).</div>
+        </div>
+
         <!-- Lista de prendas acumuladas en esta solicitud -->
         <div *ngIf="returnItems.length > 0" class="mt-4 pt-3 border-top">
           <h6 class="fw-bold mb-2">Prendas a Procesar en esta Solicitud:</h6>
@@ -481,7 +494,13 @@
           <button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" [disabled]="loading" (click)="onSubmitReturn()">
             <span *ngIf="loading" class="spinner-border spinner-border-sm me-1"></span>
             <i *ngIf="!loading" class="bi bi-check2-circle me-1"></i> Confirmar y Aplicar Devolución en Inventario
-          </button>
+          
+          <!-- Comprobante / Nota de Credito generada -->
+          <div *ngIf="lastReturn?.credit_note_code" class="alert alert-success mt-3 p-3 rounded-4 border-2 border-success">
+            <h6 class="fw-bold mb-1 text-success"><i class="bi bi-receipt-cutoff me-1"></i> Nota de Crédito Oficial Emitida: {{ lastReturn?.credit_note_code }}</h6>
+            <p class="mb-0 small text-dark">{{ lastReturn?.price_difference_message || 'Saldo a favor del cliente registrado para su próxima compra en tienda.' }}</p>
+          </div>
+</button>
         </div>
       </div>
     </div>

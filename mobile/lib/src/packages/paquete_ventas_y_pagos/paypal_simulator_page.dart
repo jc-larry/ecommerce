@@ -30,6 +30,7 @@ class PayPalSimulatorPage extends StatefulWidget {
   final double amountBob;
   final String description;
   final String merchantName;
+  final int initialRemainingSeconds;
 
   const PayPalSimulatorPage({
     super.key,
@@ -38,6 +39,7 @@ class PayPalSimulatorPage extends StatefulWidget {
     required this.amountBob,
     required this.description,
     this.merchantName = 'FashionStore Bolivia S.R.L.',
+    this.initialRemainingSeconds = 300,
   });
 
   @override
@@ -59,9 +61,74 @@ class _PayPalSimulatorPageState extends State<PayPalSimulatorPage> {
   List<Map<String, dynamic>> _funding = const [];
   String _fundingId = 'BALANCE';
   Timer? _timer;
+  Timer? _countdownTimer;
+  late int _remainingSeconds;
+
+  @override
+  void initState() {
+    super.initState();
+    _remainingSeconds = widget.initialRemainingSeconds;
+    _startCountdown();
+  }
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _remainingSeconds = 0);
+        _handleTimeout();
+      } else {
+        setState(() => _remainingSeconds--);
+      }
+    });
+  }
+
+  void _handleTimeout() {
+    if (_step == _SimStep.done) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.timer_off_outlined, color: _ppError),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sesión Expirada (5 min)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'El tiempo de 5 minutos para completar el pago ha expirado. '
+          'Tu reserva de prendas ha sido liberada para otros clientes y '
+          'no se ha realizado ningún cobro en tu cuenta.',
+          style: TextStyle(fontSize: 14),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop({
+                'timeout': true,
+                'error': 'Tiempo límite de pago expirado (5 minutos). Stock liberado.',
+              });
+            },
+            style: FilledButton.styleFrom(backgroundColor: _ppNavy),
+            child: const Text('Volver al Carrito'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void dispose() {
+    _countdownTimer?.cancel();
     _timer?.cancel();
     _emailCtrl.dispose();
     _passCtrl.dispose();
@@ -215,6 +282,7 @@ class _PayPalSimulatorPageState extends State<PayPalSimulatorPage> {
           child: Column(
             children: [
               _header(),
+              _timerBar(),
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
@@ -262,6 +330,45 @@ class _PayPalSimulatorPageState extends State<PayPalSimulatorPage> {
             ],
           ),
           const SizedBox(width: 8),
+        ],
+      ),
+    );
+  }
+
+  Widget _timerBar() {
+    final isUrgent = _remainingSeconds <= 60;
+    final minutes = (_remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_remainingSeconds % 60).toString().padLeft(2, '0');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+      decoration: BoxDecoration(
+        color: isUrgent ? const Color(0xFFFFF0F0) : const Color(0xFFEFF6FF),
+        border: Border(
+          bottom: BorderSide(
+            color: isUrgent ? const Color(0xFFFFB4B4) : const Color(0xFFC7DCFA),
+          ),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isUrgent ? Icons.warning_amber_rounded : Icons.timer_outlined,
+            size: 16,
+            color: isUrgent ? _ppError : _ppNavy,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            isUrgent
+                ? '¡Tiempo a punto de expirar!: $minutes:$seconds'
+                : 'Tiempo para completar tu pago: $minutes:$seconds',
+            style: TextStyle(
+              color: isUrgent ? _ppError : _ppNavy,
+              fontSize: 12.5,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
     );

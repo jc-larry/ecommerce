@@ -292,10 +292,12 @@ def delete_size(
     return None
 
 # --- Prendas (Products) ---
+# [CU11 - Paso 1] (IU) El usuario o cliente navega en la vitrina del catálogo web o móvil
 @router.get("/products", response_model=List[ProductResponse])
+# [CU11 - Paso 2] / [DSC011 - Paso 2] +1. list_products()
 def list_products(db: Session = Depends(get_db)):
     """[CU07 / CU11] Lista el catálogo completo de prendas (el cliente filtra activos en el frontend)"""
-    # [CU11 - Paso 3] / [DSC011 - Paso 3] +select_active() (aquí trae todos y filtra frontend, u obtiene filtrados)
+    # [CU11 - Paso 3] / [DSC011 - Paso 3] +2. select_active()
     prods = (
         db.query(Product)
         .options(
@@ -307,7 +309,9 @@ def list_products(db: Session = Depends(get_db)):
         )
         .all()
     )
+    # [CU11 - Paso 4] / [DSC011 - Paso 4] +3. attach_ratings()
     _attach_ratings(db, prods)
+    # [CU11 - Paso 5] / [DSC011 - Paso 5] +4. return_products_json()
     return prods
 
 # --- Búsqueda y Disponibilidad por Sucursal (CU12) ---
@@ -346,7 +350,9 @@ def get_catalog_filter_options(db: Session = Depends(get_db)):
     )
 
 
+# [CU12 - Paso 1] (IU) El cliente ingresa criterios de búsqueda y filtros facetados en IU_BusquedaCatalogo
 @router.get("/products/search", response_model=ProductSearchResponse)
+# [CU12 - Paso 2] / [DSC012 - Paso 2] +1. buscar_y_filtrar_catalogo(criterios)
 def search_products(
     q: Optional[str] = None,
     category_id: Optional[int] = None,
@@ -363,8 +369,7 @@ def search_products(
     db: Session = Depends(get_db),
 ):
     """[CU12] Búsqueda y filtrado facetado de catálogo con disponibilidad por sucursal."""
-    # [CU12 - Paso 2] / [DSC012 - Paso 2] +buscar_y_filtrar_catalogo(criterios)
-    # [CU12 - Paso 3] / [DSC012 - Paso 3] +select_products_with_facets()
+    # [CU12 - Paso 3] / [DSC012 - Paso 3] +2. select_products_with_facets()
     query = (
         db.query(Product)
         .options(
@@ -413,11 +418,11 @@ def search_products(
     all_matching = query.all()
     _attach_ratings(db, all_matching)
 
-    # [CU12 - Paso 4] / [DSC012 - Paso 4] +verificar_stock_sucursales(sucursal_id)
     # Calcular stock por sucursal y stock global para cada producto
     variant_ids = [v.id for p in all_matching for v in p.variants]
     stock_map: dict[tuple[int, int], int] = {}
     if variant_ids:
+        # [CU12 - Paso 4] / [DSC012 - Paso 4] +3. verificar_stock_sucursales(sucursal_id)
         inv_rows = (
             db.query(Inventory.branch_id, Inventory.variant_id, Inventory.stock_actual)
             .filter(Inventory.variant_id.in_(variant_ids))
@@ -468,7 +473,7 @@ def search_products(
     start = (page - 1) * page_size
     paged_items = processed_items[start : start + page_size]
 
-    # [CU12 - Paso 5] / [DSC012 - Paso 5] +Retornar catálogo facetado
+    # [CU12 - Paso 5] / [DSC012 - Paso 5] +4. Retornar catálogo facetado
     return ProductSearchResponse(
         items=paged_items,
         total=total,
@@ -478,11 +483,10 @@ def search_products(
     )
 
 
+# [CU12 - Paso 6] / [DSC012 - Paso 6] +1. get_availability_by_branch(product_id)
 @router.get("/products/{product_id}/branch-availability", response_model=ProductAvailabilityResponse)
 def get_product_branch_availability(product_id: int, db: Session = Depends(get_db)):
     """[CU12] Desglose de disponibilidad y stock de cada variante por sucursal física."""
-    # [CU12 - Paso 6] / [DSC012 - Paso 6] +get_availability_by_branch(product_id)
-    # [CU12 - Paso 7] / [DSC012 - Paso 7] +select_branches_inventory(product_id)
     prod = (
         db.query(Product)
         .options(
@@ -498,6 +502,7 @@ def get_product_branch_availability(product_id: int, db: Session = Depends(get_d
     branches = db.query(Branch).filter(Branch.is_active == True).order_by(Branch.name.asc()).all()  # noqa: E712
     variant_ids = [v.id for v in prod.variants]
 
+    # [CU12 - Paso 7] / [DSC012 - Paso 7] +2. select_branches_inventory(product_id)
     inv_rows = (
         db.query(Inventory.branch_id, Inventory.variant_id, Inventory.stock_actual)
         .filter(Inventory.variant_id.in_(variant_ids))
@@ -538,7 +543,7 @@ def get_product_branch_availability(product_id: int, db: Session = Depends(get_d
             )
         )
 
-    # [CU12 - Paso 8] / [DSC012 - Paso 8] +Retornar desglose por sucursales
+    # [CU12 - Paso 8] / [DSC012 - Paso 8] +3. Retornar desglose por sucursales
     return ProductAvailabilityResponse(
         product_id=prod.id,
         product_name=prod.name,
@@ -584,15 +589,30 @@ def ratings_summary(db: Session = Depends(get_db)):
         for pid, avg, cnt in rows
     ]
 
+# [CU07 - Paso 1] (IU) El Superadministrador completa los datos de la prenda y variantes en IU_Products
 @router.post("/products", response_model=ProductResponse, status_code=201)
+# [CU07 - Paso 2] / [DSC007 - Paso 2] +1. create_product(datos, variantes)
 def create_product(
     data: ProductCreate,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(admin_check)
 ):
-    """[CU07] Registra una nueva prenda con sus variantes e imágenes"""
-    # [CU07 - Paso 3] / [DSC007 - Paso 3] +insert_product(datos)
+    """
+    ========================================================================================
+    DIAGRAMA DE SECUENCIA UML 2.5: CU07 - REGISTRAR PRODUCTO
+    Participantes:
+      - Actor: Superadmin
+      - IU: IU_Products (Frontend Web: products.component.ts)
+      - Controlador: CTR_Products (Backend Router: routers.py -> create_product)
+      - Entidad 1: CE_Producto (Modelo ORM: models.py -> Product)
+      - Entidad 2: CE_Variante (Modelo ORM: models.py -> ProductVariant)
+    ========================================================================================
+    """
+    
+    # --------------------------------------------------------------------------------------
+    # [CU07 - Paso 3] / [DSC007 - Paso 3] +2. insert_product(datos)
+    # --------------------------------------------------------------------------------------
     prod = Product(
         name=data.name,
         description=data.description,
@@ -607,11 +627,18 @@ def create_product(
         tags=data.tags,
     )
     db.add(prod)
-    db.flush()
-    # [CU07 - Paso 4] / [DSC007 - Paso 4] +ID Producto (implícito)
 
-    # [CU07 - Paso 5] / [DSC007 - Paso 5] +insert_variants(variantes)
+    # --------------------------------------------------------------------------------------
+    # [CU07 - Paso 4] / [DSC007 - Paso 4] +3. ID Producto
+    # (db.flush() sincroniza con PostgreSQL y asigna el ID generado a prod.id)
+    # --------------------------------------------------------------------------------------
+    db.flush()
+
+    # --------------------------------------------------------------------------------------
+    # [DSC007 - FRAGMENTO LOOP]: loop [Por cada variante]
+    # --------------------------------------------------------------------------------------
     for var in data.variants:
+        # [CU07 - Paso 5] / [DSC007 - Paso 5] +4. insert_variants(variantes)
         variant = ProductVariant(
             product_id=prod.id,
             color_id=var.color_id,
@@ -622,7 +649,7 @@ def create_product(
         )
         db.add(variant)
 
-    # Agregar imágenes asociadas
+    # Agregar imágenes asociadas de la prenda
     for img in data.images:
         image = ProductImage(
             product_id=prod.id,
@@ -632,13 +659,22 @@ def create_product(
         )
         db.add(image)
 
+    # --------------------------------------------------------------------------------------
+    # [CU07 - Paso 6] / [DSC007 - Paso 6] +5. Confirmación
+    # (db.commit() consolida la transacción atómica de la prenda y sus variantes en BD)
+    # --------------------------------------------------------------------------------------
     db.commit()
     db.refresh(prod)
 
     # Auditar inserción de producto (CU36)
     log_event(db, current_user.id, "INSERT", "products", prod.id, {"name": prod.name, "variants_count": len(data.variants)}, request.client.host)
-    # [CU07 - Paso 6] / [DSC007 - Paso 6] +Producto Creado
+
     _attach_ratings(db, [prod])
+
+    # --------------------------------------------------------------------------------------
+    # [CU07 - Paso 7] / [DSC007 - Paso 7] +6. 201 Created (Producto Creado)
+    # (Respuesta HTTP 201 Created con el objeto serializado hacia la interfaz de usuario)
+    # --------------------------------------------------------------------------------------
     return prod
 
 @router.put("/products/{product_id}", response_model=ProductResponse)
@@ -773,7 +809,9 @@ def list_reviews(
     return ProductReviewsResponse(summary=ReviewSummary(average=average, count=count), items=items)
 
 
+# [CU14 - Paso 1] (IU) El cliente califica la prenda con estrellas (1-5) y escribe su opinión en IU_ProductDetail
 @router.post("/products/{product_id}/reviews", response_model=ReviewResponse, status_code=201)
+# [CU14 - Paso 2] / [DSC014 - Paso 2] +1. submit_review(product_id, rating, comment)
 def submit_review(
     product_id: int,
     data: ReviewCreate,
@@ -782,8 +820,7 @@ def submit_review(
     current_user: User = Depends(get_current_user),
 ):
     """[CU14] Crea o actualiza la reseña del cliente para esta prenda (una por prenda por cliente)"""
-    # [CU14 - Paso 2] / [DSC014 - Paso 2] +submit_review(product_id, rating, comment)
-    # [CU14 - Paso 3] / [DSC014 - Paso 3] +check_product_exists(product_id)
+    # [CU14 - Paso 3] / [DSC014 - Paso 3] +2. check_product_exists(product_id) y upsert por (product_id, user_id)
     prod = db.query(Product).filter(Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -794,7 +831,7 @@ def submit_review(
         .first()
     )
     action = "UPDATE" if review else "INSERT"
-    # [CU14 - Paso 4] / [DSC014 - Paso 4] +insert_or_update(review, status='APPROVED')
+    # [CU14 - Paso 4] / [DSC014 - Paso 4] +3. review persistida en base de datos (CE_Resena)
     if review:
         review.rating = data.rating
         review.comment = data.comment
@@ -809,9 +846,14 @@ def submit_review(
     db.commit()
     db.refresh(review)
 
-    # [CU14 - Paso 5] / [DSC014 - Paso 5] +log_event(review) y confirmación
+    # [CU14 - Paso 5] / [DSC014 - Paso 5] +4. log_event(INSERT/UPDATE product_reviews)
     log_event(db, current_user.id, action, "product_reviews", review.id,
               {"product_id": product_id, "rating": data.rating}, request.client.host)
+
+    # [CU14 - Paso 6] / [DSC014 - Paso 6] +5. recalcular avg + count de valoraciones
+    _attach_ratings(db, [prod])
+
+    # [CU14 - Paso 7] / [DSC014 - Paso 7] +6. return ReviewResponse (reseñas y promedio actualizados)
     return ReviewResponse(
         id=review.id, rating=review.rating, comment=review.comment,
         author_name=f"{current_user.first_name} {current_user.last_name}".strip(),
@@ -919,7 +961,9 @@ def get_wishlist(
     return prods
 
 
+# [CU14 - Paso 8] (IU) El cliente hace clic en el icono de corazón en la ficha de la prenda
 @router.post("/wishlist/{product_id}", response_model=WishlistToggleResponse)
+# [CU14 - Paso 9] / [DSC014 - Paso 9] +1. add_to_wishlist(product_id)
 def add_to_wishlist(
     product_id: int,
     request: Request,
@@ -927,24 +971,26 @@ def add_to_wishlist(
     current_user: User = Depends(get_current_user),
 ):
     """[CU14] Marca una prenda como favorita (idempotente)"""
-    # [CU14 - Paso 6] / [DSC014 - Paso 6] +add_to_wishlist(product_id)
-    # [CU14 - Paso 7] / [DSC014 - Paso 7] +check_product_exists(product_id)
+    # [CU14 - Paso 10] / [DSC014 - Paso 10] +2. check_product_exists(product_id)
     if not db.query(Product.id).filter(Product.id == product_id).first():
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
     exists = db.query(WishlistItem).filter(
         WishlistItem.user_id == current_user.id, WishlistItem.product_id == product_id
     ).first()
-    # [CU14 - Paso 8] / [DSC014 - Paso 8] +insert(wishlist_item)
     if not exists:
+        # [CU14 - Paso 11] / [DSC014 - Paso 11] +3. insert(wishlist_item) en CE_Favorito
         db.add(WishlistItem(user_id=current_user.id, product_id=product_id))
         db.commit()
-        # [CU14 - Paso 9] / [DSC014 - Paso 9] +log_event(wishlist) y confirmación
+        # [CU14 - Paso 12] / [DSC014 - Paso 12] +4. log_event(INSERT wishlist_items)
         log_event(db, current_user.id, "INSERT", "wishlist_items", product_id,
                   {"product_id": product_id}, request.client.host)
+    # [CU14 - Paso 13] / [DSC014 - Paso 13] +5. return WishlistToggleResponse(in_wishlist=True)
     return WishlistToggleResponse(product_id=product_id, in_wishlist=True)
 
 
+# [CU14 - Paso 8b] (IU) El cliente desmarca el icono de corazón
 @router.delete("/wishlist/{product_id}", response_model=WishlistToggleResponse)
+# [CU14 - Paso 9b] / [DSC014 - Paso 9] +1. remove_from_wishlist(product_id)
 def remove_from_wishlist(
     product_id: int,
     request: Request,
@@ -952,13 +998,16 @@ def remove_from_wishlist(
     current_user: User = Depends(get_current_user),
 ):
     """[CU14] Quita una prenda de favoritos"""
+    # [CU14 - Paso 10b] / [DSC014 - Paso 10] +2. delete en wishlist_items por (user_id, product_id)
     deleted = db.query(WishlistItem).filter(
         WishlistItem.user_id == current_user.id, WishlistItem.product_id == product_id
     ).delete()
     db.commit()
+    # [CU14 - Paso 12b] / [DSC014 - Paso 12] +3. log_event(DELETE wishlist_items)
     if deleted:
         log_event(db, current_user.id, "DELETE", "wishlist_items", product_id,
                   {"product_id": product_id}, request.client.host)
+    # [CU14 - Paso 13b] / [DSC014 - Paso 13] +4. return WishlistToggleResponse(in_wishlist=False)
     return WishlistToggleResponse(product_id=product_id, in_wishlist=False)
 
 
@@ -1231,7 +1280,9 @@ def list_coupons(
     return db.query(Coupon).order_by(Coupon.created_at.desc()).all()
 
 
+# [CU13 - Paso 1] (IU) El Encargado completa el formulario del cupón en IU_Promociones
 @router.post("/coupons", response_model=CouponResponse, status_code=201)
+# [CU13 - Paso 2] / [DSC013 - Paso 2] +1. create_coupon(code, discount_type, discount_value, valid_until)
 def create_coupon(
     data: CouponCreate,
     request: Request,
@@ -1239,9 +1290,8 @@ def create_coupon(
     current_user: User = Depends(admin_check),
 ):
     """[CU13] Crea un nuevo cupón de descuento."""
-    # [CU13 - Paso 2] / [DSC013 - Paso 2] +create_coupon(code, discount_type, discount_value, valid_until)
     normalized_code = data.code.strip().upper()
-    # [CU13 - Paso 3] / [DSC013 - Paso 3] +check_coupon_code_unique(code)
+    # [CU13 - Paso 3] / [DSC013 - Paso 3] +2. check_coupon_code_unique(code)
     existing = db.query(Coupon).filter(Coupon.code == normalized_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="El código de cupón ya existe.")
@@ -1249,7 +1299,7 @@ def create_coupon(
     if data.valid_until <= data.valid_from:
         raise HTTPException(status_code=400, detail="La fecha de expiración debe ser posterior a la fecha de inicio.")
 
-    # [CU13 - Paso 4] / [DSC013 - Paso 4] +insert(coupon, status='ACTIVE')
+    # [CU13 - Paso 4] / [DSC013 - Paso 4] +3. insert(coupon, status='ACTIVE')
     coupon = Coupon(
         code=normalized_code,
         discount_type=data.discount_type,
@@ -1264,7 +1314,7 @@ def create_coupon(
     db.add(coupon)
     db.commit()
     db.refresh(coupon)
-    # [CU13 - Paso 5] / [DSC013 - Paso 5] +log_event(coupon) y confirmación
+    # [CU13 - Paso 5] / [DSC013 - Paso 5] +4. log_event(coupon) y confirmación
     log_event(db, current_user.id, "INSERT", "coupons", coupon.id, {"code": coupon.code}, request.client.host)
     return coupon
 
@@ -1336,9 +1386,9 @@ def validate_coupon(
     db: Session = Depends(get_db),
 ):
     """[CU13] Valida un código de cupón contra el monto del pedido (para carrito / checkout)."""
-    # [CU13 - Paso 6] / [DSC013 - Paso 6] +validate_coupon(code, subtotal)
+    # [CU13 - Paso 6] / [DSC013 - Paso 6] +1. validate_coupon(code, subtotal)
     normalized_code = data.code.strip().upper()
-    # [CU13 - Paso 7] / [DSC013 - Paso 7] +select_coupon_where(code)
+    # [CU13 - Paso 7] / [DSC013 - Paso 7] +2. select_coupon_where(code)
     coupon = db.query(Coupon).filter(Coupon.code == normalized_code).first()
 
     if not coupon:
@@ -1348,7 +1398,7 @@ def validate_coupon(
             message="El código de cupón no existe.",
         )
 
-    # [CU13 - Paso 8] / [DSC013 - Paso 8] +check_validity_dates_and_uses(coupon)
+    # [CU13 - Paso 8] / [DSC013 - Paso 8] +3. check_validity_dates_and_uses(coupon)
     if not coupon.is_active:
         return CouponValidateResponse(
             valid=False,

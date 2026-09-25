@@ -33,7 +33,8 @@ export class QuotationsReturnsComponent implements OnInit {
 
   // --- CU22 Devoluciones y Cambios ---
   orderIdToReturn: number | null = null;
-  returnType: 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA' = 'DEVOLUCION_DINERO';
+  invoiceSearchQuery: string = '';
+  returnType: 'DEVOLUCION_DINERO' | 'CAMBIO_TALLA' | 'CAMBIO_MODELO' | 'CAMBIO_PRENDA' = 'DEVOLUCION_DINERO';
   returnReason: string = 'Talla no adecuada';
   returnItems: { variant_id: number; product_name?: string; quantity: number; replacement_variant_id?: number }[] = [];
   lastReturn: OrderReturnResponse | null = null;
@@ -199,6 +200,82 @@ export class QuotationsReturnsComponent implements OnInit {
   }
 
   // --- CU22 Devoluciones y Cambios ---
+
+  /** [CU22 - Paso 1] Búsqueda de factura por código con validación estricta de 14 días (2 semanas). */
+  onSearchInvoice(): void {
+    const q = (this.invoiceSearchQuery || '').trim();
+    if (!q) {
+      this.orderSearchError = 'Ingresa el codigo de factura o ID de orden.';
+      return;
+    }
+    this.orderSearchLoading = true;
+    this.orderSearchError = null;
+    this.searchedOrder = null;
+    this.returnItems = [];
+    this.isReturnExpired = false;
+    this.returnVariantId = null;
+
+    this.ventasService.lookupInvoiceByCode(q).subscribe({
+      next: (inv) => {
+        this.orderIdToReturn = inv.order_id;
+        this.daysSincePurchase = inv.days_since_purchase;
+        this.isReturnExpired = !inv.warranty_valid;
+        if (this.isReturnExpired) {
+          this.orderSearchError = inv.warranty_message;
+        }
+
+        // Simular formato de searchedOrder para renderizar tabla
+        this.searchedOrder = {
+          id: inv.order_id,
+          order_number: inv.order_number,
+          channel: 'ONLINE',
+          status: 'PAGADA',
+          subtotal: inv.total,
+          discount_amount: 0,
+          total_amount: inv.total,
+          created_at: inv.issued_at,
+          items: inv.items.map(it => ({
+            id: it.variant_id,
+            variant_id: it.variant_id,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            subtotal: it.subtotal,
+            product_name: it.product_name,
+            sku: it.sku || 'N/A',
+            size: it.size || 'Unica',
+            color: it.color || 'Estandar'
+          })),
+          payments: [],
+          branch_name: inv.branch_name,
+          invoice: {
+            id: inv.invoice_id,
+            doc_type: 'FACTURA',
+            subtotal: inv.total,
+            tax_rate: 0.13,
+            tax_amount: 0,
+            total: inv.total,
+            control_code: inv.invoice_code,
+            customer_nit: inv.customer_nit,
+            customer_name: inv.customer_name,
+            issued_at: inv.issued_at,
+            qr_payload: ''
+          }
+        } as any;
+        this.orderSearchLoading = false;
+      },
+      error: (err) => {
+        // Fallback a busqueda por ID de orden numerico si falla
+        if (/^\d+$/.test(q)) {
+          this.orderIdToReturn = Number(q);
+          this.onSearchOrder();
+        } else {
+          this.orderSearchError = err?.error?.detail || `Factura o comprobante '${q}' no encontrado.`;
+          this.orderSearchLoading = false;
+        }
+      }
+    });
+  }
+
   onSearchOrder(): void {
     if (!this.orderIdToReturn) {
       this.orderSearchError = 'Ingresa un número de orden para buscar.';
@@ -218,9 +295,11 @@ export class QuotationsReturnsComponent implements OnInit {
         if (order.created_at) {
           const pDate = new Date(order.created_at);
           this.daysSincePurchase = Math.floor((Date.now() - pDate.getTime()) / (1000 * 3600 * 24));
-          if (this.daysSincePurchase > 30) {
+          if (this.daysSincePurchase > 14) {
             this.isReturnExpired = true;
-            this.orderSearchError = `Plazo de devolución vencido. Esta orden fue comprada hace ${this.daysSincePurchase} días (el ${pDate.toLocaleDateString()}). El límite máximo permitido es de 30 días calendario.`;
+            this.orderSearchError = `Plazo de garantia vencido. Esta orden fue comprada hace ${this.daysSincePurchase} dias (el ${pDate.toLocaleDateString()}). El limite maximo permitido es estrictamente de 14 dias (2 semanas) calendario.`;
+          } else if (false) {
+            // fallbackón vencido. Esta orden fue comprada hace ${this.daysSincePurchase} días (el ${pDate.toLocaleDateString()}). El límite máximo permitido es de 30 días calendario.`;
           }
         }
       },
@@ -268,6 +347,7 @@ export class QuotationsReturnsComponent implements OnInit {
     this.returnItems.splice(index, 1);
   }
 
+  /** [CU22 - Pasos 2-5] Envía la solicitud de cambio por talla, cambio por modelo (diferencia o nota de crédito) o devolución. */
   onSubmitReturn(): void {
     if (!this.orderIdToReturn || !this.searchedOrder) {
       this.errorMessage = 'Por favor busca y selecciona una orden de venta válida primero.';

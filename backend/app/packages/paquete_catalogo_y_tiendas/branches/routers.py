@@ -20,7 +20,9 @@ def list_branches(
     """[CU06] Lista todas las sucursales de la cadena (público para selección de retiro/pickup en ventas)"""
     return db.query(Branch).all()
 
-@router.post("", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
+# [CU06 - Paso 1] (IU) El Superadministrador completa los datos de la sucursal en el panel administrativo
+@router.post("", response_model=BranchResponse, status_code=201)
+# [CU06 - Paso 2] / [DSC006 - Paso 2] +1. create_branch(datos)
 def create_branch(
     branch_data: BranchCreate,
     request: Request,
@@ -35,19 +37,25 @@ def create_branch(
             detail="La plataforma FashionStore opera exclusivamente con sucursales físicas en Santa Cruz de la Sierra."
         )
 
+    # [CU06 - Paso 3] / [DSC006 - Paso 3] +2. check_exists(nombre)
     existing = db.query(Branch).filter(Branch.name == branch_data.name).first()
     if existing:
+        # [CU06 - Paso 4a] / [DSC006 - Paso 4a] +2a. Existe (Error 400)
         raise HTTPException(status_code=400, detail="El nombre de la sucursal ya existe.")
         
     data_dict = branch_data.model_dump()
     data_dict["city"] = "Santa Cruz"
+    # [CU06 - Paso 4] / [DSC006 - Paso 4] +3. No existe: instanciar entidad
     branch = Branch(**data_dict)
+    # [CU06 - Paso 5] / [DSC006 - Paso 5] +4. insert_branch(datos)
     db.add(branch)
+    # [CU06 - Paso 6] / [DSC006 - Paso 6] +5. Sucursal Creada (db.commit)
     db.commit()
     db.refresh(branch)
 
     # Auditar creación de sucursal (CU36)
     log_event(db, current_user.id, "INSERT", "branches", branch.id, {"name": branch.name}, request.client.host)
+    # [CU06 - Paso 7] / [DSC006 - Paso 7] +6. HTTP 201 Created / Actualizar lista en UI
     return branch
 
 @router.put("/{branch_id}", response_model=BranchResponse)
@@ -133,7 +141,9 @@ def toggle_branch_closure(
 
     return branch
 
+# [CU09 - Paso 1] (IU) El Superadministrador selecciona el empleado y la sucursal en el panel
 @router.post("/{branch_id}/employees", response_model=BranchResponse)
+# [CU09 - Paso 2] / [DSC009 - Paso 2] +1. assign_employee_to_branch()
 def assign_employee_to_branch(
     branch_id: int,
     assignment: AssignEmployee,
@@ -142,7 +152,7 @@ def assign_employee_to_branch(
     current_user: User = Depends(admin_check)
 ):
     """[CU09] Asigna un cajero o encargado a una sucursal física"""
-    # [CU09 - Paso 3] / [DSC009 - Paso 3] +check_exists(sucursal_id, usuario_id)
+    # [CU09 - Paso 3] / [DSC009 - Paso 3] +2. check_exists(sucursal_id, usuario_id)
     branch = db.query(Branch).filter(Branch.id == branch_id).first()
     if not branch:
         raise HTTPException(status_code=404, detail="Sucursal no encontrada.")
@@ -157,15 +167,16 @@ def assign_employee_to_branch(
 
     if user in branch.employees:
         raise HTTPException(status_code=400, detail="El empleado ya se encuentra asignado a esta sucursal.")
-    # [CU09 - Paso 4] / [DSC009 - Paso 4] +insert_assign(sucursal_id, usuario_id)
+    # [CU09 - Paso 4] / [DSC009 - Paso 4] +3. insert_assign(sucursal_id, usuario_id)
     # Un empleado pertenece a una sola sucursal: si estaba en otra, se traslada.
     assign_user_to_branch(db, user, branch.id)
+    # [CU09 - Paso 5] / [DSC009 - Paso 5] +4. commit_asignacion()
     db.commit()
     db.refresh(branch)
 
     # Auditar asignación de empleado (CU36)
     log_event(db, current_user.id, "INSERT", "branch_employees", branch.id, {"employee_id": user.id, "role": roles}, request.client.host)
-    # [CU09 - Paso 6] / [DSC009 - Paso 6] +Asignación Completada
+    # [CU09 - Paso 6] / [DSC009 - Paso 6] +5. Asignación Completada (HTTP 200 OK)
     return branch
 
 @router.delete("/{branch_id}/employees/{user_id}", response_model=BranchResponse)

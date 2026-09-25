@@ -90,6 +90,7 @@ class PayPalSimulatorApproveRequest(PayPalSimulatorLoginRequest):
 
 
 class CheckoutRequest(BaseModel):
+    """[CU18 / CU19] Solicitud de Checkout omnicanal con soporte para Retiro en Sucursal (48h) o Envio a Domicilio."""
     branch_id: int
     channel: str = Field("ONLINE", pattern="^(ONLINE|POS)$")
     payment_type: str = Field(..., pattern="^(EFECTIVO|TARJETA|QR|CREDITO|PAYPAL)$")
@@ -104,6 +105,7 @@ class CheckoutRequest(BaseModel):
     customer_name: Optional[str] = None
     cash_shift_id: Optional[int] = None
     pos_items: Optional[List[CartItemAdd]] = None
+    delivery_type: Optional[str] = Field("ENVIO_DOMICILIO", pattern="^(ENVIO_DOMICILIO|RETIRO_TIENDA)$")
     shipping_method: Optional[str] = Field("DELIVERY", pattern="^(DELIVERY|PICKUP)$")
     delivery_address: Optional[str] = None
     recipient_name: Optional[str] = None
@@ -183,6 +185,9 @@ class OrderResponse(BaseModel):
     tracking_number: Optional[str] = None
     delivery_address: Optional[str] = None
     shipping_method: Optional[str] = None
+    delivery_type: Optional[str] = "ENVIO_DOMICILIO"
+    pickup_deadline: Optional[datetime] = None
+    payment_session_expires_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -282,8 +287,9 @@ class OrderReturnItemCreate(BaseModel):
 
 
 class OrderReturnCreate(BaseModel):
+    """[CU22] Solicitud de cambio o devolucion: CAMBIO_TALLA, CAMBIO_MODELO o DEVOLUCION_DINERO."""
     order_id: int
-    return_type: str = Field(..., pattern="^(DEVOLUCION_DINERO|CAMBIO_PRENDA)$")
+    return_type: str = Field(..., pattern="^(DEVOLUCION_DINERO|CAMBIO_PRENDA|CAMBIO_TALLA|CAMBIO_MODELO)$")
     reason: str = Field(..., min_length=3, max_length=255)
     items: List[OrderReturnItemCreate]
 
@@ -297,6 +303,9 @@ class OrderReturnResponse(BaseModel):
     refund_amount: float
     status: str
     created_at: datetime
+    credit_note_code: Optional[str] = None
+    difference_amount: Optional[float] = 0.0
+    price_difference_message: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -317,3 +326,49 @@ class CustomerReturnResponse(OrderReturnResponse):
     """[CU22 / CU24] Devolución o cambio de una compra del cliente en sesión."""
     order_number: str
     items: List[CustomerReturnItemResponse] = []
+
+
+class InvoiceItemDetail(BaseModel):
+    variant_id: int
+    product_name: str
+    sku: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
+    quantity: int
+    unit_price: float
+    subtotal: float
+
+
+class InvoiceLookupResponse(BaseModel):
+    """[CU22 - Paso 1] Consulta de factura con verificacion de garantia de 14 dias calendario."""
+    invoice_id: int
+    invoice_code: str
+    order_id: int
+    order_number: str
+    branch_id: int
+    branch_name: str
+    customer_name: Optional[str] = None
+    customer_nit: Optional[str] = None
+    total: float
+    issued_at: datetime
+    days_since_purchase: int
+    warranty_valid: bool
+    warranty_days_limit: int = 14
+    warranty_message: str
+    items: List[InvoiceItemDetail]
+
+
+class CreditNoteResponse(BaseModel):
+    id: int
+    credit_note_code: str
+    user_id: int
+    order_id: Optional[int] = None
+    return_id: Optional[int] = None
+    amount: float
+    status: str
+    reason: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

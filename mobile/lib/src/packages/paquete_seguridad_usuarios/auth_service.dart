@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,32 +14,47 @@ class AuthService {
   //   flutter run  --dart-define=API_BASE_URL=https://fashionstore-api.tudominio.com/api/v1
   //   flutter build apk --dart-define=API_BASE_URL=https://fashionstore-api.tudominio.com/api/v1
   //
-  // DESARROLLO (elige según dónde corre la app):
-  //   - Dispositivo físico en el mismo Wi-Fi → la IP LAN de la PC:
-  //       --dart-define=API_HOST=192.168.x.x
-  //   - Emulador Android → --dart-define=API_HOST=10.0.2.2
-  //   - Emulador iOS / Flutter web/desktop → --dart-define=API_HOST=127.0.0.1
-  //
-  // El backend debe correr con host 0.0.0.0 para que un teléfono lo alcance:
-  //   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+  // DESARROLLO (detección inteligente según plataforma):
+  //   - Desktop Windows/Mac/Linux o Web → 127.0.0.1
+  //   - Celular físico en la misma red Wi-Fi → 10.10.150.139 (IP actual de la PC)
+  //   - Emulador Android → 10.0.2.2 o 10.10.150.139
   static const String _baseUrlOverride =
       String.fromEnvironment('API_BASE_URL', defaultValue: '');
-  static const String _host =
-      String.fromEnvironment('API_HOST', defaultValue: '192.168.0.11');
+  static const String _envHost =
+      String.fromEnvironment('API_HOST', defaultValue: '');
   static const String _port =
       String.fromEnvironment('API_PORT', defaultValue: '8000');
 
+  /// Detecta automáticamente el host adecuado según dónde esté corriendo la app
+  static String get _defaultHost {
+    if (kIsWeb) return '127.0.0.1';
+    try {
+      if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+        return '127.0.0.1';
+      }
+    } catch (_) {}
+    // Dispositivo móvil (Android / iOS): IP de la PC en la red Wi-Fi actual
+    return '10.10.150.139';
+  }
+
+  static String get _host => _envHost.isNotEmpty ? _envHost : _defaultHost;
+
   static String? _customApiBaseUrl;
+
+  static const String _prefCustomUrl = 'custom_api_base_url';
+  // Servidor compilado en el APK con el que se guardó la URL personalizada.
+  static const String _prefCustomUrlBuild = 'custom_api_base_url_build';
+
+  /// Servidor que trae compilado este APK (vía --dart-define o detección automática).
+  static String get _compiledBaseUrl =>
+      _baseUrlOverride.isNotEmpty ? _baseUrlOverride : 'http://$_host:$_port/api/v1';
 
   /// Base pública de la API (la usan también otras vistas, p. ej. el catálogo).
   static String get apiBaseUrl {
     if (_customApiBaseUrl != null && _customApiBaseUrl!.isNotEmpty) {
       return _customApiBaseUrl!;
     }
-    if (_baseUrlOverride.isNotEmpty) {
-      return _baseUrlOverride;
-    }
-    return 'http://$_host:$_port/api/v1';
+    return _compiledBaseUrl;
   }
 
   static String get _baseUrl => '$apiBaseUrl/auth';
@@ -65,13 +81,21 @@ class AuthService {
   }
 
   /// Cargar URL personalizada guardada en preferencias (si existe).
+  ///
+  /// Solo vale para el APK con el que se guardó: al instalar encima un APK compilado para
+  /// otro servidor, Android conserva los datos de la app y la URL vieja taparía la nueva,
+  /// así que se descarta y manda la del APK.
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('custom_api_base_url');
-      if (saved != null && saved.trim().isNotEmpty) {
-        _customApiBaseUrl = saved.trim();
+      final saved = prefs.getString(_prefCustomUrl);
+      if (saved == null || saved.trim().isEmpty) return;
+      if (prefs.getString(_prefCustomUrlBuild) != _compiledBaseUrl) {
+        await prefs.remove(_prefCustomUrl);
+        await prefs.remove(_prefCustomUrlBuild);
+        return;
       }
+      _customApiBaseUrl = saved.trim();
     } catch (_) {}
   }
 
@@ -80,7 +104,8 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     final clean = normalizeApiBaseUrl(url);
     _customApiBaseUrl = clean;
-    await prefs.setString('custom_api_base_url', clean);
+    await prefs.setString(_prefCustomUrl, clean);
+    await prefs.setString(_prefCustomUrlBuild, _compiledBaseUrl);
   }
 
   /// Probar conectividad con el backend

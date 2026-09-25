@@ -119,9 +119,11 @@ def get_my_delivery_profile(
     return dp
 
 
+# [CU29 - Paso 1] (IU) El repartidor activa su disponibilidad en la app móvil / panel web
 @router.patch("/delivery-persons/availability", response_model=DeliveryPersonResponse)
+# [CU29 - Paso 1.1] / [DSC029 - Paso 1.1] +1. update_availability(repartidor_id, true)
 def toggle_availability(
-    is_available: bool = Query(...),
+    is_available: bool = Query(..., description="Nuevo estado de disponibilidad"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -129,6 +131,7 @@ def toggle_availability(
     dp = db.query(DeliveryPerson).filter(DeliveryPerson.user_id == current_user.id).first()
     if not dp:
         raise HTTPException(status_code=404, detail="Perfil de repartidor no encontrado")
+    # [CU29 - Paso 1.2] / [DSC029 - Paso 1.2] +2. update(is_available=true)
     dp.is_available = is_available
     db.commit()
     db.refresh(dp)
@@ -183,22 +186,15 @@ def get_my_active_shipments(
     return [_build_shipment_response(s) for s in shipments]
 
 
+# [CU29 - Paso 2] (IU) El repartidor visualiza pedidos disponibles y pulsa Tomar Pedido
 @router.post("/shipments/{shipment_id}/claim", response_model=ShipmentResponse)
+# [CU29 - Paso 2.1] / [DSC029 - Paso 2.1] +1. claim_shipment(shipment_id, repartidor_id)
 def claim_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(delivery_checker),
 ):
-    """[CU29] Auto-selección atómica de pedido por el repartidor.
-    # [CU29 - Paso 3] / [DSC029 - Paso 3] +claim_shipment(shipment_id, delivery_person_id)
-    # [CU29 - Paso 4] / [DSC029 - Paso 4] +update(shipment, status='ASSIGNED', claimed_at)
-    
-    Al tomar el pedido:
-    - Se asigna delivery_person_id
-    - Cambia estado a ASSIGNED
-    - Ya no aparece en la bolsa para otros repartidores
-    - Genera hito de tracking
-    """
+    """[CU29] Auto-selección atómica de pedido por el repartidor."""
     dp = db.query(DeliveryPerson).filter(DeliveryPerson.user_id == current_user.id).first()
     if not dp:
         raise HTTPException(status_code=403, detail="Solo un repartidor con perfil activo puede tomar pedidos")
@@ -221,10 +217,12 @@ def claim_shipment(
     shipment.delivery_person_id = dp.id
     shipment.carrier_name = driver_name
     shipment.carrier_phone = dp.phone
+    # [CU29 - Paso 2.2] / [DSC029 - Paso 2.2] +2. update(shipment, status='ASSIGNED', claimed_at)
     shipment.status = "ASSIGNED"
     shipment.claimed_at = now
     shipment.updated_at = now
 
+    # [CU29 - Paso 2.3] / [DSC029 - Paso 2.3] +3. insert(ShipmentTrackingEvent, status='ASSIGNED')
     event = ShipmentTrackingEvent(
         shipment_id=shipment.id,
         status="ASSIGNED",
@@ -274,7 +272,9 @@ def release_shipment(
     return _build_shipment_response(shipment)
 
 
+# [CU29 - Paso 3] (IU) El repartidor actualiza el avance de la ruta (recogido / en tránsito)
 @router.patch("/shipments/{shipment_id}/route-status", response_model=ShipmentResponse)
+# [CU29 - Paso 3.1] / [DSC029 - Paso 3.1] +1. update_route_status(shipment_id, status)
 def update_route_status(
     shipment_id: int,
     data: DeliveryStatusUpdate,
@@ -285,8 +285,6 @@ def update_route_status(
 
     La entrega final se confirma con /confirm-delivery, que exige foto de evidencia.
     """
-    # [CU29 - Paso 4] / [DSC029 - Paso 4] +update_route_status(shipment_id, status)
-    # [CU29 - Paso 5] / [DSC029 - Paso 5] +advance_route(PICKED_UP -> IN_TRANSIT -> OUT_FOR_DELIVERY)
     shipment, dp = _owned_shipment(db, current_user, shipment_id)
 
     if data.status == "DELIVERED":
@@ -302,6 +300,7 @@ def update_route_status(
         )
 
     now = datetime.now()
+    # [CU29 - Paso 3.2] / [DSC029 - Paso 3.2] +2. update(shipment, status=data.status)
     shipment.status = data.status
     shipment.updated_at = now
 
@@ -315,6 +314,7 @@ def update_route_status(
     if data.status == "PICKED_UP" and not shipment.dispatched_at:
         shipment.dispatched_at = now
 
+    # [CU29 - Paso 3.3] / [DSC029 - Paso 3.3] +3. insert(ShipmentTrackingEvent, status=data.status)
     event = ShipmentTrackingEvent(
         shipment_id=shipment.id,
         status=data.status,
@@ -340,8 +340,8 @@ def report_failed_delivery(
     Incrementa delivery_attempts y cambia estado a FAILED_ATTEMPT.
     Si supera 3 intentos, cambia automáticamente a RETURNED_TO_STORE.
     """
-    # [CU29 - Paso 6] / [DSC029 - Paso 6] / [CU30 - Paso 3] / [DSC030 - Paso 3] +report_failed_delivery(reason)
-    # [CU29 - Paso 7] / [DSC029 - Paso 7] +update(shipment, status='FAILED_ATTEMPT', attempts+1)
+    # [CU29 - Op: Reportar Entrega Fallida] / [CU30 - Op: Evento Entrega Fallida] +1. report_failed_delivery(reason)
+    # [CU29 - Op: Entrega Fallida] +2. update(shipment, status='FAILED_ATTEMPT', attempts+1)
     shipment, dp = _owned_shipment(db, current_user, shipment_id)
     if shipment.status not in DELIVERABLE_STATUSES:
         raise HTTPException(status_code=400, detail="Solo se reporta un intento fallido de un pedido en ruta.")
@@ -418,7 +418,9 @@ def reschedule_delivery(
 # EVIDENCIA DE ENTREGA E HISTORIAL DEL REPARTIDOR (CU30)
 # ===================================================================
 
+# [CU29 - Paso 4] (IU) El repartidor sube foto de evidencia y confirma la entrega
 @router.post("/shipments/{shipment_id}/confirm-delivery", response_model=ShipmentResponse)
+# [CU29 - Paso 4.1] / [DSC029 - Paso 4.1] +1. confirm_delivery(shipment_id, photo, name)
 def confirm_delivery(
     shipment_id: int,
     data: DeliveryConfirmation,
@@ -430,9 +432,6 @@ def confirm_delivery(
     La foto queda guardada en el envío y en el hito DELIVERED de la línea de tiempo, como
     respaldo ante un reclamo del cliente ("no me llegó").
     """
-    # [CU29 - Paso 5] / [DSC029 - Paso 5] +confirm_delivery(photo_data_url, received_by_name)
-    # [CU29 - Paso 6] / [DSC029 - Paso 6] +update(shipment, status='DELIVERED', photo, delivered_at)
-    # [CU29 - Paso 7] / [DSC029 - Paso 7] +increment_repartidor_total_deliveries() y notificar
     shipment, dp = _owned_shipment(db, current_user, shipment_id)
     if shipment.status not in DELIVERABLE_STATUSES:
         raise HTTPException(status_code=400, detail="Primero debes recoger el pedido e iniciar la ruta.")
@@ -443,17 +442,20 @@ def confirm_delivery(
 
     now = datetime.now()
     received_by = data.received_by_name.strip()
+    # [CU29 - Paso 4.2] / [DSC029 - Paso 4.2] +2. update(shipment, status='DELIVERED', photo, delivered_at)
     shipment.status = "DELIVERED"
     shipment.delivered_at = now
     shipment.updated_at = now
     shipment.delivery_photo_url = data.photo_data_url
     shipment.received_by_name = received_by
+    # [CU29 - Paso 4.3] / [DSC029 - Paso 4.3] +3. increment_repartidor_total_deliveries()
     if dp:
         dp.total_deliveries += 1
 
     description = f"Pedido entregado a {received_by}. Evidencia fotográfica registrada por el repartidor."
     if data.notes:
         description = f"{description} {data.notes}"[:255]
+    # [CU29 - Paso 4.4] / [DSC029 - Paso 4.4] +4. insert(ShipmentTrackingEvent, status='DELIVERED')
     db.add(ShipmentTrackingEvent(
         shipment_id=shipment.id,
         status="DELIVERED",
@@ -474,8 +476,8 @@ def get_my_delivery_history(
     current_user: User = Depends(delivery_checker),
 ):
     """[CU29 / CU30] Historial del repartidor: entregas realizadas, fallidas o devueltas, con sus tiempos."""
-    # [CU29 - Paso 7] / [DSC029 - Paso 7] +get_repartidor_delivery_history()
-    # [CU29 - Paso 8] / [DSC029 - Paso 8] +select_deliveries_with_duration_and_photos()
+    # [CU29 - Op: Historial Repartidor] +1. get_repartidor_delivery_history()
+    # [CU29 - Op: Historial Repartidor] +2. select_deliveries_with_duration_and_photos()
     dp = db.query(DeliveryPerson).filter(DeliveryPerson.user_id == current_user.id).first()
     if not dp:
         raise HTTPException(status_code=404, detail="Perfil de repartidor no encontrado")

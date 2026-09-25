@@ -22,6 +22,7 @@ export class CartModalComponent implements OnInit, OnChanges {
 
   // Formulario Checkout
   selectedBranchId: number | null = null;
+  deliveryType: 'RETIRO_TIENDA' | 'ENVIO_DOMICILIO' = 'RETIRO_TIENDA';
   paymentType: 'TARJETA' | 'PAYPAL' | 'QR' = 'TARJETA';
   docType: 'FACTURA' | 'NOTA_ENTREGA' = 'FACTURA';
   customerNit: string = '';
@@ -264,6 +265,8 @@ export class CartModalComponent implements OnInit, OnChanges {
     const payload: any = {
       channel: 'ONLINE',
       branch_id: this.selectedBranchId,
+      delivery_type: this.deliveryType,
+      shipping_method: this.deliveryType === 'RETIRO_TIENDA' ? 'PICKUP' : 'DELIVERY',
       payment_type: this.paymentType,
       doc_type: this.docType,
       customer_nit: this.customerNit || '0',

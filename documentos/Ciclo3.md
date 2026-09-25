@@ -357,152 +357,460 @@ sequenceDiagram
 
 ## 2.1 Diagramas de comunicación
 
-**CU26 — Agendar reserva con seña (incluye pago PayPal)**
+Notación **Mermaid (flowchart LR)**: Actor (`:Actor`) · Interfaz (`<<boundary>> :IU_*`) · Control (`<<control>> :CTR_*`) · Entidad (`<<entity>> :CE_*`) y Servicios Externos (`<<external>>`); correspondencia 1:1 con reservas, logística, IA (vestidor virtual/chatbot/voz) y analítica.
+
+### CU25: Convertir una reserva en venta confirmada
 
 ```mermaid
 flowchart LR
-    C(("👤 Cliente"))
-    IU(["🖥️ IU_ReservarProbador"])
-    CTR_R(("⚙️ CTR_Reservas"))
-    CTR_P(("⚙️ CTR_PayPal"))
-    PP(("🌐 PayPal API"))
-    CE_I[("🗄️ CE_Inventario")]
-    CE_R[("🗄️ CE_Reserva")]
-    CE_L[("🗄️ CE_LibroMayor")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cajero")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_POS_Reservas</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Reservas</b>"]:::controlStyle
+    CE_TC["&laquo;entity&raquo;<br/><b>:CE_TurnoCaja</b>"]:::entityStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b>"]:::entityStyle
+
+    C -- "1: seleccionarReserva(reservation_id)" --> IU
+    IU -- "2: convert_to_pos(reservation_id, items, payment, NIT)" --> CTR
+    CTR -- "3: validar_turno_abierto(cashier_id, branch_id)" --> CE_TC
+    CE_TC -. "4: turno (status: ABIERTO)" .-> CTR
+    CTR -- "5: get_reservation(reservation_id)" --> CE_R
+    CE_R -. "6: reserva (items, deposit_amount)" .-> CTR
+    CTR -- "7: reponer_no_comprados(variant_ids)" --> CE_I
+    CE_I -. "8: stock_restaurado" .-> CTR
+    CTR -- "9: insert_order(POS, items, turno)" --> CE_O
+    CE_O -. "10: order_id" .-> CTR
+    CTR -- "11: insert_payment(saldo, medio)" --> CE_O
+    CTR -- "12: insert_invoice(IVA 13%, NIT)" --> CE_O
+    CE_O -. "13: invoice (control_code)" .-> CTR
+    CTR -- "14: update_status = COMPLETED" --> CE_R
+    CE_R -. "15: ok" .-> CTR
+    CTR -. "16: OrderResponse (order, invoice)" .-> IU
+    IU -. "17: Mostrar comprobante y reserva completada" .-> C
+```
+
+### CU26: Agendar reserva de prendas para prueba física
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_ReservarProbador</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Reservas</b>"]:::controlStyle
+    CTR_PP["&laquo;control&raquo;<br/><b>:CTR_PayPal</b>"]:::controlStyle
+    API_PP["&laquo;external&raquo;<br/><b>:PayPal_API</b>"]:::externalStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b>"]:::entityStyle
+    CE_L["&laquo;entity&raquo;<br/><b>:CE_LibroMayor</b>"]:::entityStyle
 
     C -- "1: elegirVariante(color, talla)" --> IU
-    IU -- "2: consultarStockPorSucursal()" --> CTR_R
-    C -- "3: elegirSucursal(fecha, hora, medioPago)" --> IU
-    IU -- "4: crearOrden(seña) [si PayPal]" --> CTR_P
-    CTR_P -- "5: POST /v2/checkout/orders" --> PP
-    C -- "6: aprobar en PayPal" --> PP
-    IU -- "7: capturar(orderId)" --> CTR_P
-    IU -- "8: crearReserva(ítems, pago)" --> CTR_R
-    CTR_R -- "9: verificarOrdenCompleta()" --> CTR_P
-    CTR_R -- "10: validarStock() y descontar" --> CE_I
-    CTR_R -- "11: asentar RESERVA" --> CE_L
-    CTR_R -- "12: insertar(PENDING, expira +48h)" --> CE_R
-    CTR_R -. "13: código RES-XXXXXX" .-> IU
+    IU -- "2: get_branch_availability(product_id, variant_id)" --> CTR
+    CTR -. "3: [(branch_id, stock)]" .-> IU
+    C -- "4: elegirSucursal(fecha, hora, medioPago)" --> IU
+    IU -- "5: create_order(app_amount_bs)" --> CTR_PP
+    CTR_PP -- "6: POST /v2/checkout/orders" --> API_PP
+    API_PP -. "7: order_id + approve_url" .-> CTR_PP
+    CTR_PP -. "8: approve_url" .-> IU
+    IU -- "9: capture_order(order_id)" --> CTR_PP
+    CTR_PP -- "10: POST /v2/checkout/orders/{id}/capture" --> API_PP
+    API_PP -. "11: COMPLETED + payer" .-> CTR_PP
+    CTR_PP -. "12: VERIFIED" .-> IU
+    IU -- "13: create_reservation(items, payment_ref)" --> CTR
+    CTR -- "14: verify_completed_order(order_id)" --> CTR_PP
+    CTR_PP -. "15: VERIFIED" .-> CTR
+    CTR -- "16: descontar_stock(variant_ids, qty)" --> CE_I
+    CE_I -. "17: stock_descontado" .-> CTR
+    CTR -- "18: insert_movimiento(RESERVA)" --> CE_L
+    CE_L -. "19: ok" .-> CTR
+    CTR -- "20: insert_reservation(PENDING, expires_at)" --> CE_R
+    CE_R -. "21: reservation_code RES-XXXXXX" .-> CTR
+    CTR -. "22: {reservation_code, total, deposit}" .-> IU
+    IU -. "23: Confirmación y código de reserva" .-> C
 ```
 
-**CU25 — Convertir reserva en venta**
+### CU27: Gestionar la bandeja de reservas entrantes (Kanban)
 
 ```mermaid
 flowchart LR
-    Cj(("👤 Cajero"))
-    IU(["🖥️ IU_POS · pestaña Reservas"])
-    CTR(("⚙️ CTR_Reservas"))
-    CE_T[("🗄️ CE_TurnoCaja")]
-    CE_O[("🗄️ CE_Orden/Pago/Factura")]
-    CE_I[("🗄️ CE_Inventario")]
-    CE_R[("🗄️ CE_Reserva")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Cj -- "1: seleccionarReserva()" --> IU
-    Cj -- "2: marcarPrendasCompradas(ids)" --> IU
-    IU -- "3: convertirAPos(turno, pago, NIT)" --> CTR
-    CTR -- "4: validar turno ABIERTO propio" --> CE_T
-    CTR -- "5: reponer prendas no compradas" --> CE_I
-    CTR -- "6: crear orden POS + pago saldo + factura IVA" --> CE_O
-    CTR -- "7: status = COMPLETED" --> CE_R
-    CTR -. "8: comprobante" .-> IU
+    E(("👤 :Encargado")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_KanbanReservas</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Reservas</b>"]:::controlStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+
+    E -- "1: abrir_bandeja()" --> IU
+    IU -- "2: get_reservations(branch_id)" --> CTR
+    CTR -- "3: select WHERE branch = ?" --> CE_R
+    CE_R -. "4: [reservations]" .-> CTR
+    CTR -- "5: evaluarTolerancia(reservation)" --> CTR
+    CTR -- "6: liberar_stock si CANCELLED / NO_SHOW" --> CE_I
+    CE_I -. "7: ok" .-> CTR
+    CTR -. "8: [reservas con estado actualizado]" .-> IU
+    IU -. "9: Mostrar columnas Kanban (PENDING / PREPARING / READY / COMPLETED)" .-> E
+    E -- "10: moverTarjeta(reservation_id, nuevo_estado)" --> IU
+    IU -- "11: update_status(reservation_id, status)" --> CTR
+    CTR -- "12: update reservation.status" --> CE_R
+    CE_R -. "13: ok" .-> CTR
+    CTR -- "14: liberar_stock(variant_ids)" --> CE_I
+    CE_I -. "15: ok" .-> CTR
+    CTR -. "16: OK" .-> IU
+    IU -. "17: Tablero actualizado" .-> E
 ```
 
-**CU29 — Entrega con evidencia fotográfica**
+### CU28: Cancelar reserva de prendas y liberar stock
 
 ```mermaid
 flowchart LR
-    R(("👤 Repartidor"))
-    IU(["📱 IU_PanelRepartidor"])
-    CTR(("⚙️ CTR_Repartidores"))
-    CE_D[("🗄️ CE_Repartidor")]
-    CE_S[("🗄️ CE_Envio")]
-    CE_E[("🗄️ CE_EventoTracking")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    R -- "1: activarDisponibilidad()" --> IU
-    IU -- "2: PATCH availability" --> CTR
-    CTR -- "3: is_available = true" --> CE_D
-    R -- "4: tomarPedido(id)" --> IU
-    IU -- "5: claim(id)" --> CTR
-    CTR -- "6: ASSIGNED + claimed_at" --> CE_S
-    CTR -- "7: evento ASSIGNED" --> CE_E
-    R -- "8: avanzarRuta(PICKED_UP…OUT_FOR_DELIVERY)" --> IU
-    R -- "9: fotografiar + receptor" --> IU
-    IU -- "10: confirmDelivery(foto, receptor)" --> CTR
-    CTR -- "11: DELIVERED + foto + delivered_at" --> CE_S
-    CTR -- "12: total_deliveries + 1" --> CE_D
+    C(("👤 :Cliente / Encargado")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Reservas</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Reservas</b>"]:::controlStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    CE_L["&laquo;entity&raquo;<br/><b>:CE_LibroMayor</b>"]:::entityStyle
+
+    C -- "1: cancelarReserva(reserva_id=14, motivo)" --> IU
+    IU -- "2: PUT /api/v1/reservations/14/cancel" --> CTR
+    CTR -- "3: get_reservation_items(reserva_id=14)" --> CE_R
+    CE_R -. "4: items = [{variante_id=5, qty=2}, {variante_id=8, qty=1}]" .-> CTR
+    CTR -- "5: update_stock(branch_id=1, var_id, qty=+cant)" --> CE_I
+    CE_I -. "6: OK" .-> CTR
+    CTR -- "7: insert_entry(branch_id=1, var_id, qty=+cant, type='CANCELACION_RESERVA')" --> CE_L
+    CE_L -. "8: OK" .-> CTR
+    CTR -- "9: update_status(14, 'CANCELLED')" --> CE_R
+    CE_R -. "10: OK" .-> CTR
+    CTR -. "11: HTTP 200 OK (status='CANCELLED')" .-> IU
+    IU -. "12: mostrarAviso('Reserva cancelada y stock liberado')" .-> C
 ```
 
-**CU32 — Vestidor virtual**
+### CU29: Gestionar envíos a domicilio y portal del repartidor
 
 ```mermaid
 flowchart LR
-    C(("👤 Cliente"))
-    IU(["🖥️ IU_Vestidor"])
-    CTR(("⚙️ CTR_Analitica"))
-    SVC(("⚙️ VirtualTryonAIService"))
-    EXT(("🌐 FASHN / HF IDM-VTON"))
-    CE_P[("🗄️ CE_Prenda")]
-    CE_C[("🗄️ CE_CapturaVestidor")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    C -- "1: elegirPrenda(foto)" --> IU
-    C -- "2: subirFoto()" --> IU
-    IU -- "3: removeBackground(foto)" --> CTR
-    CTR -- "4: segmentar persona (rembg)" --> SVC
-    C -- "5: ingresarMedidas()" --> IU
-    IU -- "6: simulate(medidas, prenda)" --> CTR
-    CTR -- "7: consultar prenda" --> CE_P
-    CTR -. "8: talla + calce" .-> IU
-    IU -- "9: generateVton(persona, prenda)" --> CTR
-    CTR -- "10: generar" --> SVC
-    SVC -- "10.1 [si hay credenciales]" --> EXT
-    SVC -. "10.2 [si no] motor local anatómico" .-> SVC
-    IU -- "11: guardarCaptura()" --> CTR
-    CTR -- "12: insertar" --> CE_C
+    R(("👤 :Repartidor")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_PanelRepartidor</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Repartidores</b>"]:::controlStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Repartidor</b>"]:::entityStyle
+    CE_E["&laquo;entity&raquo;<br/><b>:CE_Envio</b>"]:::entityStyle
+    CE_T["&laquo;entity&raquo;<br/><b>:CE_EventoTracking</b>"]:::entityStyle
+
+    R -- "1: activar_disponibilidad()" --> IU
+    IU -- "2: update_availability(repartidor_id, true)" --> CTR
+    CTR -- "3: update is_available = true" --> CE_R
+    CE_R -. "4: ok" .-> CTR
+    CTR -. "5: ok" .-> IU
+    R -- "6: tomar_pedido(shipment_id)" --> IU
+    IU -- "7: claim_shipment(shipment_id, repartidor_id)" --> CTR
+    CTR -- "8: update status = ASSIGNED, claimed_at" --> CE_E
+    CE_E -. "9: ok" .-> CTR
+    CTR -- "10: insert tracking_event(ASSIGNED)" --> CE_T
+    CE_T -. "11: ok" .-> CTR
+    CTR -. "12: ok" .-> IU
+    R -- "13: avanzar_ruta(PICKED_UP / IN_TRANSIT / OUT_FOR_DELIVERY)" --> IU
+    IU -- "14: update_route_status(shipment_id, status)" --> CTR
+    CTR -- "15: update shipment.status" --> CE_E
+    CE_E -. "16: ok" .-> CTR
+    CTR -- "17: insert tracking_event(status)" --> CE_T
+    CE_T -. "18: ok" .-> CTR
+    CTR -. "19: ok" .-> IU
+    R -- "20: entregar(foto, received_by_name)" --> IU
+    IU -- "21: confirm_delivery(shipment_id, photo, name)" --> CTR
+    CTR -- "22: update status = DELIVERED, foto, delivered_at" --> CE_E
+    CE_E -. "23: ok" .-> CTR
+    CTR -- "24: total_deliveries + 1" --> CE_R
+    CE_R -. "25: ok" .-> CTR
+    CTR -- "26: insert tracking_event(DELIVERED)" --> CE_T
+    CE_T -. "27: ok" .-> CTR
+    CTR -. "28: ok" .-> IU
+    IU -. "29: Entrega confirmada con evidencia" .-> R
 ```
 
-**Detalle de comunicación CU32**
-
-El flujo de comunicación de CU32 queda separado en responsabilidades de análisis para que el
-caso de uso sea trazable desde la interfaz hasta la persistencia:
-
-| Objeto | Tipo | Responsabilidad en CU32 |
-| :-- | :-- | :-- |
-| `IU_Vestidor` | Boundary | Recibe foto, prenda, medidas, modo de prueba y acciones finales del cliente. |
-| `CTR_Analitica` | Control | Coordina endpoints `/analytics/tryon/*`, valida sesión, prenda, variante y payloads. |
-| `VirtualTryonAIService` | Control/Servicio | Ejecuta segmentación, rigging, recomendación de talla y motor VTON en cascada. |
-| `CE_Prenda` | Entity | Entrega datos del producto, variante, imagen frontal, categoría y tallas disponibles. |
-| `CE_SesionVestidor` | Entity | Registra canal `WEB/MOBILE`, token de sesión y estado de la prueba virtual. |
-| `CE_PrendaProbada` | Entity | Guarda cada prenda/variante probada con talla sugerida y feedback de calce. |
-| `CE_CapturaVestidor` | Entity | Persiste la captura generada, modelo usado, confianza y medidas asociadas. |
-
-Mensajes principales:
-
-1. `crearSesion(channel)` inicia la trazabilidad formal del vestidor.
-2. `obtenerRigPrenda(product_id, image_url)` mide la prenda una sola vez para el modo RA en vivo.
-3. `removeBackground(photo)` normaliza la foto del cliente para la prueba fotorrealista.
-4. `simulate(measurements, product_id)` calcula talla recomendada y ajuste.
-5. `generateVton(photo, garment, model_choice)` selecciona FASHN.ai, IDM-VTON o motor local.
-6. `registrarItemProbado(session_token, product_id, variant_id, tested_size)` audita la prenda.
-7. `guardarCaptura(session_token, result_url, confidence)` deja evidencia reutilizable para compra o reserva.
-
-**CU34 — Búsqueda por voz**
+### CU30: Rastrear el estado de un envío en tiempo real
 
 ```mermaid
 flowchart LR
-    C(("👤 Cliente"))
-    IU(["🖥️ IU_Catalogo (micrófono)"])
-    STT(("🎙️ Reconocedor de voz del dispositivo"))
-    CTR(("⚙️ CTR_Analitica · NLP"))
-    CE_P[("🗄️ CE_Prenda")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    C -- "1: hablar" --> IU
-    IU -- "2: transcribir" --> STT
-    STT -. "3: texto" .-> IU
-    IU -- "4: voice-nlp(texto)" --> CTR
-    CTR -- "5: extraer prenda/color/precio" --> CTR
-    CTR -- "6: filtrar" --> CE_P
-    CTR -. "7: productos" .-> IU
+    C(("👤 :Cliente / Repartidor")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Rastreo</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Logistica</b>"]:::controlStyle
+    CE_E["&laquo;entity&raquo;<br/><b>:CE_Envio</b>"]:::entityStyle
+    CE_ET["&laquo;entity&raquo;<br/><b>:CE_EventosTracking</b>"]:::entityStyle
+
+    C -- "1: buscarEnvio(tracking_number='TRK-A1B2C3D4')" --> IU
+    IU -- "2: track_shipment(tracking_number)" --> CTR
+    CTR -- "3: select WHERE tracking_number = 'TRK-A1B2C3D4'" --> CE_E
+    CE_E -. "4: shipment (status='EN_CAMINO', address, repartidor_id)" .-> CTR
+    CTR -- "5: select tracking_events WHERE shipment_id = id" --> CE_ET
+    CE_ET -. "6: [(status, location, description, created_at)]" .-> CTR
+    CTR -. "7: HTTP 200 OK (shipment_timeline[])" .-> IU
+    IU -. "8: Mostrar estado actual, repartidor y línea de tiempo en mapa" .-> C
 ```
+
+### CU31: Gestionar zonas de cobertura y tarifas de envío (anillos / km)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    S(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_DeliveryZonas</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Logistica</b>"]:::controlStyle
+    CE_DZ["&laquo;entity&raquo;<br/><b>:CE_DeliveryZone</b>"]:::entityStyle
+
+    S -- "1: gestionar_zonas()" --> IU
+    IU -- "2: GET /api/v1/logistics/zones" --> CTR
+    CTR -- "3: select * FROM delivery_zones" --> CE_DZ
+    CE_DZ -. "4: [zones]" .-> CTR
+    CTR -. "5: HTTP 200 OK (zones con mapa Leaflet)" .-> IU
+    IU -. "6: Mostrar mapa y anillos concéntricos" .-> S
+    S -- "7: crear_zona(name, min_km, max_km, base_rate, estimated_hours)" --> IU
+    IU -- "8: POST /api/v1/logistics/zones (data)" --> CTR
+    CTR -- "9: insert delivery_zone" --> CE_DZ
+    CE_DZ -. "10: zone_id = 4" .-> CTR
+    CTR -. "11: HTTP 201 Created" .-> IU
+    IU -. "12: Zona agregada al mapa" .-> S
+    S -- "13: calcular_tarifa(distance_km=12.5)" --> IU
+    IU -- "14: calculate_rate(distance_km=12.5)" --> CTR
+    CTR -- "15: select WHERE min_km <= 12.5 AND max_km >= 12.5" --> CE_DZ
+    CE_DZ -. "16: null" .-> CTR
+    CTR -- "17: tarifa_base + (distancia - max_km) * 5.0" --> CTR
+    CE_DZ -. "16a: zona (base_rate, estimated_hours)" .-> CTR
+    CTR -. "18: (tarifa=Bs 25.00, horas=24)" .-> IU
+    IU -. "19: Mostrar tarifa calculada en checkout" .-> S
+```
+
+### CU32: Probador (vestidor) virtual IA y recomendación de talla (RA / VTON)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Vestidor</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Analitica</b>"]:::controlStyle
+    VTON["&laquo;external&raquo;<br/><b>:VirtualTryonAI</b>"]:::externalStyle
+    HF["&laquo;external&raquo;<br/><b>:FASHN_HF</b>"]:::externalStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Prenda</b>"]:::entityStyle
+
+    C -- "1: elegir_prenda(product_id)" --> IU
+    C -- "2: subir_foto(person_image)" --> IU
+    IU -- "3: remove_background(photo)" --> CTR
+    CTR -- "4: segmentar_persona(rembg u2net)" --> VTON
+    VTON -. "5: imagen_sin_fondo" .-> CTR
+    CTR -. "6: imagen_sin_fondo" .-> IU
+    C -- "7: ingresar_medidas(estatura, peso, pecho, cintura)" --> IU
+    IU -- "8: simulate_talla(medidas, product_id)" --> CTR
+    CTR -- "9: get_product(product_id)" --> CE_P
+    CE_P -. "10: producto (sizes, measurements)" .-> CTR
+    CTR -. "11: {talla_recomendada, calce_por_zona}" .-> IU
+    C -- "12: generate_vton(persona, prenda)" --> IU
+    IU -- "13: generar_imagen(persona, prenda)" --> CTR
+    CTR -- "14: ejecutar_pipeline(persona, prenda)" --> VTON
+    VTON -- "15: FASHN.ai tryon" --> HF
+    HF -. "16: imagen_fotorrealista" .-> VTON
+    VTON -- "15a: pose + amoldado anatomico" --> VTON
+    VTON -. "17: imagen_resultado + modelo_usado" .-> CTR
+    CTR -. "18: {imagen_vestida, modelo}" .-> IU
+    IU -. "19: Mostrar imagen probada en pantalla" .-> C
+    C -- "20: agregar_al_carrito / reservar_en_tienda" --> IU
+```
+
+### CU33: Asistente IA (chatbot) de recomendaciones
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente / Visitante")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Chatbot</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Analitica</b>"]:::controlStyle
+    CE_C["&laquo;entity&raquo;<br/><b>:CE_Conversacion</b>"]:::entityStyle
+
+    C -- "1: abrir_chatbot()" --> IU
+    IU -. "2: Widget de chat abierto" .-> C
+    C -- "3: enviar_mensaje('Busco un vestido elegante para fiesta en Equipetrol')" --> IU
+    IU -- "4: POST /api/v1/analytics/chatbot/message (session_token, message)" --> CTR
+    CTR -- "5: detectar_intencion(message) -> STYLE_RECOMMENDATION" --> CTR
+    CTR -- "6: buscar prendas afines con stock activo en sucursal" --> CTR
+    CTR -- "7: generar_respuesta(intencion, contexto, sugerencias)" --> CTR
+    CTR -- "8: insert conversacion(USER + BOT)" --> CE_C
+    CE_C -. "9: OK" .-> CTR
+    CTR -. "10: HTTP 200 OK (respuesta, prendas_sugeridas[], acciones_rapidas[])" .-> IU
+    IU -. "11: Mostrar respuesta de estilo + prendas interactivas con enlace a probador" .-> C
+```
+
+### CU34: Búsqueda de prendas por comandos de voz (NLP)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Catalogo</b>"]:::boundaryStyle
+    REC["&laquo;external&raquo;<br/><b>:Reconocedor_Voz</b>"]:::externalStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_NLP</b>"]:::controlStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Prenda</b>"]:::entityStyle
+
+    C -- "1: tocar_microfono()" --> IU
+    IU -- "2: listen(idioma es-*)" --> REC
+    REC -. "3: transcripcion: 'vestido rojo hasta 200'" .-> IU
+    IU -. "4: Mostrar texto transcrito" .-> C
+    IU -- "5: voice_nlp(query_text)" --> CTR
+    CTR -- "6: extraer_entidades(texto) -> {prenda, color, genero, precio_max}" --> CTR
+    CTR -- "7: buscar(prenda, precio_max)" --> CE_P
+    CE_P -. "8: [hasta 10 productos]" .-> CTR
+    CTR -. "9: {productos[], entidades}" .-> IU
+    IU -. "10: Grilla filtrada + chip 'Voz: ...'" .-> C
+```
+
+### CU35: Reportes gerenciales con exportación y lectura por voz
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    S(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Reportes</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Analitica</b>"]:::controlStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+
+    S -- "1: acceder_reportes(tipo_filtro, fecha_inicio, fecha_fin)" --> IU
+    IU -- "2: GET /api/v1/analytics/reports/executive" --> CTR
+    CTR -- "3: select ventas_agregadas(orders, order_items, payments)" --> CE_O
+    CE_O -. "4: metricas_ventas[(ingresos, ticket_promedio, mas_vendidos)]" .-> CTR
+    CTR -- "3a: select inventario_agregado(inventory, inventory_ledger)" --> CE_I
+    CE_I -. "4a: metricas_inventario[(rotacion, valoracion_cpp, alertas)]" .-> CTR
+    CTR -. "5: HTTP 200 OK (reporte_metrico)" .-> IU
+    IU -. "6: Mostrar reporte y gráficas interactivas en dashboard" .-> S
+    S -- "7: exportar_csv(reporte_id)" --> IU
+    IU -- "8: GET /api/v1/analytics/reports/export-csv" --> CTR
+    CTR -. "9: HTTP 200 OK (archivo CSV con cabeceras)" .-> IU
+    IU -. "10: Descarga automática de archivo en navegador" .-> S
+    S -- "11: leer_por_voz(reporte_id)" --> IU
+    IU -- "12: POST /api/v1/analytics/reports/voice-summary" --> CTR
+    CTR -. "13: audio_stream (TTS)" .-> IU
+    IU -. "14: La síntesis de voz lee el resumen ejecutivo de ventas e inventario" .-> S
+```
+
+### CU39: Consultar Dashboard analítico de ventas e inventario global
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    S(("👤 :Superadmin")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Dashboard</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Analitica</b>"]:::controlStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+
+    S -- "1: abrir_dashboard()" --> IU
+    IU -- "2: GET /api/v1/analytics/dashboard/metrics" --> CTR
+    CTR -- "3: select ventas ONLINE vs POS, ingresos_totales, ordenes_hoy" --> CE_O
+    CE_O -. "4: [metricas_ventas]" .-> CTR
+    CTR -- "5: select stock_global, alertas_criticas, prendas_agotadas" --> CE_I
+    CE_I -. "6: [metricas_inventario]" .-> CTR
+    CTR -- "7: calcular_kpis(ventas, rotacion, alertas)" --> CTR
+    CTR -. "8: HTTP 200 OK (kpis, series_temporales, graficos_donut)" .-> IU
+    IU -. "9: Mostrar dashboard integral con indicadores en tiempo real" .-> S
+```
+
+### CU40: Centro de notificaciones in-app y correos transaccionales
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    U(("👤 :Usuario")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Notificaciones</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Notificaciones</b>"]:::controlStyle
+    CE_N["&laquo;entity&raquo;<br/><b>:CE_NotificacionInApp</b>"]:::entityStyle
+    SMTP["&laquo;control&raquo;<br/><b>:Servicio_SMTP</b>"]:::controlStyle
+    CE_DP["&laquo;entity&raquo;<br/><b>:CE_DispositivoPush</b>"]:::entityStyle
+
+    CTR -- "1: create_inapp_notification(user_id, title, message, type)" --> CE_N
+    CE_N -. "2: notification_id = 120" .-> CTR
+    CTR -- "3: email_dispatch(destinatario, asunto, plantilla_html)" --> SMTP
+    SMTP -. "4: OK" .-> CTR
+    CTR -- "5: push_dispatch(token_fcm, title, body)" --> CE_DP
+    CE_DP -. "6: OK" .-> CTR
+    U -- "7: presionarIconoCampana()" --> IU
+    IU -- "8: GET /api/v1/notifications/my" --> CTR
+    CTR -- "9: select WHERE user_id = ? ORDER BY created_at DESC" --> CE_N
+    CE_N -. "10: [notificaciones[], unread_count=3]" .-> CTR
+    CTR -. "11: HTTP 200 OK (notificaciones[], unread=3)" .-> IU
+    IU -. "12: Mostrar lista desplegable con insignia de no leídas" .-> U
+    U -- "13: marcarNotificacionLeida(notification_id=120)" --> IU
+    IU -- "14: PUT /api/v1/notifications/120/read" --> CTR
+    CTR -- "15: update is_read = true WHERE id = 120" --> CE_N
+    CE_N -. "16: OK" .-> CTR
+    CTR -. "17: HTTP 200 OK" .-> IU
+    IU -. "18: Actualizar insignia y marcar leída" .-> U
+```
+
 
 ## 2.2 Clases de análisis (Boundary / Control / Entity)
 

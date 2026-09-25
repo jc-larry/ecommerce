@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'ventas_api.dart';
 import 'cart_notifier.dart';
@@ -138,7 +139,9 @@ class _CartViewState extends State<CartView> {
           },
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) _loadCart();
+    });
   }
 
   @override
@@ -514,9 +517,14 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
   String? _error;
   Map<String, dynamic>? _successOrder;
 
+  // Temporizador de 5 minutos (300 segundos) para decisión de compra y reserva de prendas
+  int _remainingSeconds = 300;
+  Timer? _sessionTimer;
+
   @override
   void initState() {
     super.initState();
+    _startSessionCountdown();
     _loadBranches();
     _loadZones();
     _prefillUserData();
@@ -524,6 +532,152 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
     PayPalCheckout.exchangeRate().then((r) {
       if (mounted) setState(() => _exchangeRate = r);
     });
+  }
+
+  void _startSessionCountdown() {
+    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _remainingSeconds = 0);
+        _handleSessionTimeout();
+      } else {
+        setState(() => _remainingSeconds--);
+      }
+    });
+  }
+
+  void _handleSessionTimeout() {
+    if (!mounted || _successOrder != null) return;
+    _sessionTimer?.cancel();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.timer_off_outlined, color: Colors.red),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sesión Expirada (5 min)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'El tiempo para completar la compra y mantener reservadas las prendas ha finalizado (5 minutos / 300 segundos).\n\n'
+          'Por políticas de inventario, las prendas han sido liberadas para otros clientes y no se ha efectuado ningún cobro.',
+          style: TextStyle(fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop();
+            },
+            style: FilledButton.styleFrom(backgroundColor: _brand),
+            child: const Text('Volver al Carrito'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String get _formattedRemainingTime {
+    final m = (_remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_remainingSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  Widget _buildSessionTimerBanner() {
+    final isUrgent = _remainingSeconds <= 60;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: isUrgent ? const Color(0xFFFFF0F0) : const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isUrgent ? const Color(0xFFFFB4B4) : const Color(0xFFFFD8A8),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isUrgent ? Colors.red : Colors.orange).withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: isUrgent ? Colors.red.shade100 : Colors.orange.shade100,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isUrgent ? Icons.alarm_on : Icons.timer_outlined,
+              size: 20,
+              color: isUrgent ? Colors.red.shade800 : Colors.orange.shade900,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      isUrgent
+                          ? '¡Tiempo a punto de expirar!'
+                          : 'Tiempo para completar tu compra',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: isUrgent ? Colors.red.shade900 : const Color(0xFF7C2D12),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isUrgent ? Colors.red.shade700 : const Color(0xFFC2410C),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _formattedRemainingTime,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  isUrgent
+                      ? 'Tus prendas se liberarán en segundos si no confirmas el pedido.'
+                      : 'Tus prendas están reservadas temporalmente durante este tiempo.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: isUrgent ? Colors.red.shade700 : const Color(0xFF9A3412),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _prefillUserData() async {
@@ -561,6 +715,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
 
   @override
   void dispose() {
+    _sessionTimer?.cancel();
     _scrollCtrl.dispose();
     _couponCtrl.dispose();
     _nitCtrl.dispose();
@@ -620,6 +775,10 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
   Future<bool> _payWithPayPal() async {
     if (_paypalResult != null) return true;
     if (_paypalBusy) return false;
+    if (_remainingSeconds <= 0) {
+      _handleSessionTimeout();
+      return false;
+    }
     if (_total <= 0) {
       _showError('El total a pagar debe ser mayor a 0 Bs.');
       return false;
@@ -634,6 +793,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
         context,
         amountBob: amount,
         description: 'Compra Online FashionStore (${widget.cart['items_count'] ?? ''} prendas)',
+        remainingSeconds: _remainingSeconds,
       );
       if (!mounted) return false;
       setState(() => _paypalBusy = false);
@@ -650,11 +810,19 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       if (!mounted) return false;
       setState(() => _paypalBusy = false);
       _showError(e.message);
+      if (_remainingSeconds <= 0 || e.message.toLowerCase().contains('expir')) {
+        _handleSessionTimeout();
+      }
       return false;
     }
   }
 
   Future<void> _processCheckout() async {
+    if (_remainingSeconds <= 0) {
+      _handleSessionTimeout();
+      return;
+    }
+
     if (_selectedBranchId == null) {
       _showError('Selecciona una sucursal de retiro o despacho.');
       return;
@@ -765,6 +933,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
     if (!mounted) return;
 
     if (res['ok']) {
+      _sessionTimer?.cancel();
       setState(() {
         _loading = false;
         _successOrder = res['data'];
@@ -796,6 +965,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildSessionTimerBanner(),
             if (_error != null)
               Container(
                 margin: const EdgeInsets.only(bottom: 16),
@@ -1243,7 +1413,9 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton.icon(
-                onPressed: _loading || _paypalBusy ? null : _processCheckout,
+                onPressed: _loading || _paypalBusy || _remainingSeconds <= 0
+                    ? null
+                    : _processCheckout,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _brand,
                   foregroundColor: Colors.white,
@@ -1260,9 +1432,11 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                 label: Text(
                   _loading
                       ? 'Procesando...'
-                      : _paymentType == 'PAYPAL' && _paypalResult == null
-                          ? 'Pagar con PayPal (\$${_totalUsd.toStringAsFixed(2)} USD)'
-                          : 'Confirmar y Pagar (Bs. ${_total.toStringAsFixed(2)})',
+                      : _remainingSeconds <= 0
+                          ? 'Tiempo de Reserva Expirado'
+                          : _paymentType == 'PAYPAL' && _paypalResult == null
+                              ? 'Pagar con PayPal (\$${_totalUsd.toStringAsFixed(2)} USD)'
+                              : 'Confirmar y Pagar (Bs. ${_total.toStringAsFixed(2)})',
                   style: const TextStyle(
                       fontWeight: FontWeight.bold, fontSize: 16),
                 ),
@@ -1620,7 +1794,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton.icon(
-                  onPressed: _paypalBusy || _loading ? null : _processCheckout,
+                  onPressed: _paypalBusy || _loading || _remainingSeconds <= 0 ? null : _processCheckout,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFFFC439),
                     foregroundColor: const Color(0xFF003087),
@@ -1634,7 +1808,11 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                           child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF003087)))
                       : const Icon(Icons.account_balance_wallet_outlined),
                   label: Text(
-                    _paypalBusy ? 'Abriendo PayPal…' : 'Pagar con PayPal (\$${_totalUsd.toStringAsFixed(2)} USD)',
+                    _paypalBusy
+                        ? 'Abriendo PayPal…'
+                        : _remainingSeconds <= 0
+                            ? 'Tiempo Expirado'
+                            : 'Pagar con PayPal (\$${_totalUsd.toStringAsFixed(2)} USD)',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),

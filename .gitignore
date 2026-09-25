@@ -42,3 +42,5 @@ entrenamiento_ia_ropa/04_checkpoints_modelos/
 paquete_drive_vton/
 mobile/android/.gradle/
 backend/scratch/
+scratch/
+*.bak

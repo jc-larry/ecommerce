@@ -352,17 +352,16 @@
             </div>
 
             <!-- CAPA DE LA PRENDA COLOCADA AUTOMÁTICAMENTE SOBRE EL CUERPO (ANATÓMICA POR CATEGORÍA) -->
-            <div *ngIf="selectedProduct && imageSource === 'mannequin'" 
+            <div *ngIf="selectedProduct && (imageSource === 'mannequin' || imageSource === 'model' || imageSource === 'upload')" 
                  class="ar-garment-layer position-absolute pointer-events-none d-flex align-items-center justify-content-center"
                  [style.transform]="'translate(' + overlayOffsetX + 'px, ' + overlayOffsetY + 'px) scale(' + (fitScaleFactor * overlayScale) + ')'"
                  [style.opacity]="overlayOpacity"
                  [style.mix-blend-mode]="blendMode"
-                 [style.top]="isDressOrOnePiece ? '18%' : (isBottom ? '48%' : '18%')"
-                 [style.width]="isDressOrOnePiece ? '70%' : (isBottom ? '56%' : '66%')"
-                 [style.height]="isDressOrOnePiece ? '70%' : (isBottom ? '45%' : '40%')"
+                 [style.top]="isDressOrOnePiece ? '16%' : (isBottom ? '48%' : '17%')"
+                 [style.width]="isDressOrOnePiece ? '68%' : (isBottom ? '54%' : '62%')"
+                 [style.height]="isDressOrOnePiece ? '70%' : (isBottom ? '45%' : '42%')"
                  style="transition: transform 0.08s ease-out, opacity 0.2s ease; z-index: 10;">
-              <img *ngIf="selectedProduct.images && selectedProduct.images.length > 0"
-                   [src]="resolveImg(selectedProduct.images[0].image_url)"
+              <img [src]="activeGarmentImageUrl"
                    class="ar-garment-img"
                    style="max-width: 100%; max-height: 100%; object-fit: contain; filter: drop-shadow(0 8px 18px rgba(0,0,0,0.30));"
                    [alt]="selectedProduct.name">

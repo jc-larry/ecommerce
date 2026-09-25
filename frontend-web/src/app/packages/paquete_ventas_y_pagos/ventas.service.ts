@@ -126,7 +126,51 @@ export interface OrderReturnResponse {
   return_type: string;
   reason?: string | null;
   refund_amount: number;
+  difference_amount?: number;
+  credit_note_code?: string;
+  price_difference_message?: string;
   status: string;
+  created_at: string;
+}
+
+export interface InvoiceItemDetail {
+  variant_id: number;
+  product_name: string;
+  sku?: string;
+  size?: string;
+  color?: string;
+  quantity: number;
+  unit_price: number;
+  subtotal: number;
+}
+
+export interface InvoiceLookupResponse {
+  invoice_id: number;
+  invoice_code: string;
+  order_id: number;
+  order_number: string;
+  branch_id: number;
+  branch_name: string;
+  customer_name?: string;
+  customer_nit?: string;
+  total: number;
+  issued_at: string;
+  days_since_purchase: number;
+  warranty_valid: boolean;
+  warranty_days_limit: number;
+  warranty_message: string;
+  items: InvoiceItemDetail[];
+}
+
+export interface CreditNoteResponse {
+  id: number;
+  credit_note_code: string;
+  user_id: number;
+  order_id?: number;
+  return_id?: number;
+  amount: number;
+  status: string;
+  reason: string;
   created_at: string;
 }
 
@@ -147,7 +191,7 @@ export interface CustomerReturn {
   return_number: string;
   order_id: number;
   order_number: string;
-  return_type: 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA';
+  return_type: 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA' | 'CAMBIO_TALLA' | 'CAMBIO_MODELO';
   reason: string;
   refund_amount: number;
   status: string;
@@ -304,7 +348,7 @@ export class VentasService {
   // CU22 — Devoluciones y cambios
   processReturn(payload: {
     order_id: number;
-    return_type: 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA';
+    return_type: 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA' | 'CAMBIO_TALLA' | 'CAMBIO_MODELO';
     reason?: string;
     items: { variant_id: number; quantity: number; replacement_variant_id?: number }[];
   }): Observable<OrderReturnResponse> {
@@ -326,4 +370,37 @@ export class VentasService {
       notes
     });
   }
+
+  /**
+   * [CU22 - Paso 1] Búsqueda de factura por código con validación de garantía.
+   * Verifica si la compra está dentro del plazo estricto de 14 días (2 semanas)
+   * y obtiene el listado de prendas facturadas para seleccionar la devolución o cambio.
+   */
+  lookupInvoiceByCode(invoiceCode: string): Observable<InvoiceLookupResponse> {
+    return this.http.get<InvoiceLookupResponse>(`${this.baseUrl}/invoices/by-code/${encodeURIComponent(invoiceCode)}`);
+  }
+
+  /**
+   * [CU18 - Flujo Alterno A] Verificación de timeout de pasarela (5 minutos / 300 segundos).
+   * Si la sesión expiró, el backend cancela la orden y libera inmediatamente el stock a DISPONIBLE.
+   */
+  checkPaymentTimeout(orderId: number): Observable<{ order_id: number; status: string; expired: boolean; remaining_seconds?: number; message: string }> {
+    return this.http.post<any>(`${this.baseUrl}/orders/${orderId}/check-payment-timeout`, {});
+  }
+
+  /**
+   * [CU18 - Flujo Alterno B] Expiración de custodia por retiro en sucursal (48 horas superadas).
+   * Reingresa las prendas a inventario para exhibición y emite una Nota de Crédito al cliente.
+   */
+  expireUncollectedPickup(orderId: number): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/orders/${orderId}/expire-uncollected-pickup`, {});
+  }
+
+  /**
+   * [CU22 / CU18] Consulta de Notas de Crédito vigentes asociadas a la cuenta del cliente.
+   */
+  getMyCreditNotes(): Observable<CreditNoteResponse[]> {
+    return this.http.get<CreditNoteResponse[]>(`${this.baseUrl}/credit-notes/my-credit-notes`);
+  }
+
 }

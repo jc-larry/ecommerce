@@ -2,6 +2,16 @@ import { Component, OnInit } from '@angular/core';
 import { CatalogoService } from '../catalogo.service';
 import { AuthService } from '../../paquete_seguridad_usuarios/auth.service';
 
+/**
+ * ========================================================================================
+ * UML 2.5 / PATRÓN BCE: CLASE DE INTERFAZ <<Boundary>> IU_Products
+ * Participa en Diagrama de Secuencia: CU07 - Registrar Producto
+ *   - Mensaje 1: Superadmin ──► IU_Products: 1: registrar(datos, variantes)
+ *   - Mensaje 2: IU_Products ──► CTR_Products: 2: create_product(datos, variantes)
+ *   - Mensaje 7: CTR_Products ──► IU_Products: 7: Producto Creado
+ *   - Mensaje 8: IU_Products ──► Superadmin: 8: Actualizar UI
+ * ========================================================================================
+ */
 @Component({
   selector: 'app-products',
   templateUrl: './products.component.html',
@@ -397,6 +407,10 @@ export class ProductsComponent implements OnInit {
     return Object.keys(this.validationErrors).length === 0;
   }
 
+  // --------------------------------------------------------------------------------------
+  // [DSC007 - PASO 1]: Superadmin ──► IU_Products: 1: registrar(datos, variantes)
+  // El usuario interactúa con el formulario y confirma el guardado de la prenda
+  // --------------------------------------------------------------------------------------
   save(): void {
     this.error = '';
     if (!this.validateProduct()) {
@@ -422,6 +436,11 @@ export class ProductsComponent implements OnInit {
       variants: this.cleanVariants(),
     };
 
+    // --------------------------------------------------------------------------------------
+    // [DSC007 - PASO 7 & 8]: Retorno de Producto Creado y Actualizar UI
+    // [DSC007 - PASO 8]: IU_Products ──► Superadmin: 8: Actualizar UI
+    // (done() recarga la grilla con loadAll() y cierra el formulario con closeForm())
+    // --------------------------------------------------------------------------------------
     const done = () => { this.loadAll(); this.closeForm(); };
     if (this.editingId) {
       this.catalogo.updateProduct(this.editingId, base).subscribe({
@@ -429,6 +448,10 @@ export class ProductsComponent implements OnInit {
         error: (e) => (this.error = e.error?.detail || 'Error al actualizar la prenda.'),
       });
     } else {
+      // ----------------------------------------------------------------------------------
+      // [DSC007 - PASO 2]: IU_Products ──► CTR_Products: 2: create_product(datos, variantes)
+      // (Llamada HTTP POST /catalog/products hacia el backend FastAPI)
+      // ----------------------------------------------------------------------------------
       this.catalogo.createProduct(base).subscribe({
         next: done,
         error: (e) => (this.error = e.error?.detail || 'Error al crear la prenda.'),

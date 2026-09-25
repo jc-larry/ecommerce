@@ -34,6 +34,71 @@ class VirtualTryonView extends StatefulWidget {
   State<VirtualTryonView> createState() => _VirtualTryonViewState();
 }
 
+class RealStudioModel {
+  final String id;
+  final String name;
+  final String gender;
+  final double heightCm;
+  final double weightKg;
+  final String recommendedSize;
+  final String imageUrl;
+  final String tag;
+
+  const RealStudioModel({
+    required this.id,
+    required this.name,
+    required this.gender,
+    required this.heightCm,
+    required this.weightKg,
+    required this.recommendedSize,
+    required this.imageUrl,
+    required this.tag,
+  });
+}
+
+const List<RealStudioModel> _kStudioModels = [
+  RealStudioModel(
+    id: 'sofia',
+    name: 'Sofía',
+    gender: 'female',
+    heightCm: 172,
+    weightKg: 58,
+    recommendedSize: 'S',
+    imageUrl: '/uploads/models/sofia.jpg',
+    tag: 'Alta & Esbelta',
+  ),
+  RealStudioModel(
+    id: 'valeria',
+    name: 'Valeria',
+    gender: 'female',
+    heightCm: 164,
+    weightKg: 64,
+    recommendedSize: 'M',
+    imageUrl: '/uploads/models/valeria.jpg',
+    tag: 'Curvas Clásicas',
+  ),
+  RealStudioModel(
+    id: 'lin',
+    name: 'Lin',
+    gender: 'female',
+    heightCm: 160,
+    weightKg: 52,
+    recommendedSize: 'XS',
+    imageUrl: '/uploads/models/lin.jpg',
+    tag: 'Petite',
+  ),
+  RealStudioModel(
+    id: 'emma',
+    name: 'Emma',
+    gender: 'female',
+    heightCm: 168,
+    weightKg: 74,
+    recommendedSize: 'L',
+    imageUrl: '/uploads/models/emma.jpg',
+    tag: 'Plus Elegance',
+  ),
+];
+
 class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
@@ -56,10 +121,11 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
 
   // Controles del Probador Visual (Espejo Inteligente / RA)
   String _visualMode = 'mannequin'; // 'mannequin', 'model', 'photo'
+  RealStudioModel _selectedStudioModel = _kStudioModels[0];
   String? _userCustomPhotoUrl;
   double _overlayScale = 1.0;
   double _overlayOffsetY = 0.0;
-  double _overlayOpacity = 0.95;
+  final double _overlayOpacity = 0.95;
 
   // Motor Generativo Fotorrealista VTON (IA)
   String? _vtonGeneratedImageUrl;
@@ -70,6 +136,18 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
   bool _showVtonResult = true;
   String? _garmentCutoutUrl;
   String _selectedAIModel = 'IDM-VTON';
+
+  void _selectStudioModel(RealStudioModel model) {
+    setState(() {
+      _selectedStudioModel = model;
+      _visualMode = 'model';
+      _gender = model.gender;
+      _heightCtrl.text = model.heightCm.toInt().toString();
+      _weightCtrl.text = model.weightKg.toInt().toString();
+      _vtonGeneratedImageUrl = null;
+      _showVtonResult = true;
+    });
+  }
 
   @override
   void initState() {
@@ -458,14 +536,33 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
   }
 
   /// [CU32] Generación fotorrealista con IA generativa (VTON fotorrealista).
-  /// Invoca /analytics/tryon/generate-vton para sintetizar la prenda sobre el cuerpo real.
+  /// Invoca /analytics/tryon/generate-vton para sintetizar la prenda sobre el cuerpo real o modelo de estudio.
   Future<void> _generateVtonLook() async {
-    if (_userCustomPhotoUrl == null || _selectedProductId == null) {
+    if (_selectedProductId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Por favor toma o sube una foto tuya primero.')),
+        const SnackBar(content: Text('Por favor selecciona una prenda primero.')),
       );
       return;
     }
+
+    String? personImage;
+    if (_visualMode == 'photo' && _userCustomPhotoUrl != null) {
+      personImage = _userCustomPhotoUrl;
+    } else if (_visualMode == 'model') {
+      personImage = CatalogApi.resolveImage(_selectedStudioModel.imageUrl);
+    } else if (_userCustomPhotoUrl != null) {
+      personImage = _userCustomPhotoUrl;
+    } else {
+      personImage = CatalogApi.resolveImage(_selectedStudioModel.imageUrl);
+    }
+
+    if (personImage == null || personImage.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor selecciona un modelo de estudio o sube una foto tuya.')),
+      );
+      return;
+    }
+
     final currentGarmentImg = _getGarmentImage(_selectedProduct);
     if (currentGarmentImg == null || currentGarmentImg.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -483,7 +580,7 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
       final token = await AuthService.getToken();
       final url = Uri.parse('${AuthService.apiBaseUrl}/analytics/tryon/generate-vton');
       final catName = (_selectedProduct?['category']?['name'] ?? _selectedProduct?['category'] ?? 'tops').toString();
-      final recSize = _result?['recommended_size'] ?? 'M';
+      final recSize = _result?['recommended_size'] ?? _selectedStudioModel.recommendedSize;
 
       final response = await http.post(
         url,
@@ -493,7 +590,7 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
         },
         body: jsonEncode({
           'product_id': _selectedProductId,
-          'person_image': _userCustomPhotoUrl,
+          'person_image': personImage,
           'garment_image': currentGarmentImg,
           'category': catName,
           'model_choice': _selectedAIModel,
@@ -571,7 +668,9 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
         },
         body: jsonEncode({
           'product_id': _selectedProductId ?? 1,
+          'user_height_cm': h,
           'height_cm': h,
+          'user_weight_kg': w,
           'weight_kg': w,
           'chest_cm': ch,
           'waist_cm': wa,
@@ -1068,7 +1167,7 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          // Selector de Silueta / Maniquí / Cámara
+          // Selector de Silueta / Maniquí / Cámara / Modelos de Estudio
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1076,9 +1175,6 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: const Color(0xFFECE6E2)),
             ),
-            // "Cámara" ahora abre el espejo en vivo, que es lo que se espera al encenderla:
-            // la prenda puesta y siguiendo a la persona. Sacar una foto fija sigue estando,
-            // pero como opción aparte ("Foto"), porque alimenta al motor de difusión.
             child: Wrap(
               alignment: WrapAlignment.center,
               spacing: 6,
@@ -1089,7 +1185,20 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
                   label: const Text('Maniquí', style: TextStyle(fontSize: 12)),
                   selected: _visualMode == 'mannequin',
                   selectedColor: _brand.withValues(alpha: 0.15),
-                  onSelected: (_) => setState(() => _visualMode = 'mannequin'),
+                  onSelected: (_) => setState(() {
+                    _visualMode = 'mannequin';
+                    _vtonGeneratedImageUrl = null;
+                  }),
+                ),
+                ChoiceChip(
+                  avatar: const Icon(Icons.person_pin, size: 16),
+                  label: const Text('Modelos', style: TextStyle(fontSize: 12)),
+                  selected: _visualMode == 'model',
+                  selectedColor: _brand.withValues(alpha: 0.15),
+                  onSelected: (_) => setState(() {
+                    _visualMode = 'model';
+                    _vtonGeneratedImageUrl = null;
+                  }),
                 ),
                 ChoiceChip(
                   avatar: const Icon(Icons.videocam, size: 16),
@@ -1115,6 +1224,78 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
               ],
             ),
           ),
+          if (_visualMode == 'model') ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 74,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _kStudioModels.length,
+                itemBuilder: (_, i) {
+                  final m = _kStudioModels[i];
+                  final isSel = m.id == _selectedStudioModel.id;
+                  return GestureDetector(
+                    onTap: () => _selectStudioModel(m),
+                    child: Container(
+                      width: 145,
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: isSel ? _brand.withValues(alpha: 0.08) : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSel ? _brand : const Color(0xFFECE6E2),
+                          width: isSel ? 2 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              CatalogApi.resolveImage(m.imageUrl),
+                              width: 44,
+                              height: 58,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 44,
+                                height: 58,
+                                color: Colors.grey.shade200,
+                                child: const Icon(Icons.person, size: 24, color: Colors.grey),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  m.name,
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: isSel ? _brand : _ink),
+                                ),
+                                Text(
+                                  m.tag,
+                                  style: const TextStyle(fontSize: 10, color: _muted),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  'Talla ${m.recommendedSize}',
+                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _brand),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
 
           // Escenario del Vestidor (Espejo 9:16)
@@ -1162,10 +1343,10 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
                             ),
                     ),
                   )
-                // FORMATO 2: AJUSTE INTERACTIVO (FOTO/MANIQUÍ + PRENDA CALIBRADA)
+                // FORMATO 2: AJUSTE INTERACTIVO (FOTO/MODELO/MANIQUÍ + PRENDA CALIBRADA)
                 else ...[
-                  // 1. Fondo de silueta / foto
-                  if (_visualMode == 'mannequin' || _userCustomPhotoUrl == null)
+                  // 1. Fondo de silueta / modelo / foto
+                  if (_visualMode == 'mannequin')
                     Center(
                       child: Opacity(
                         opacity: 0.35,
@@ -1176,6 +1357,19 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
                         ),
                       ),
                     )
+                  else if (_visualMode == 'model')
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.network(
+                          CatalogApi.resolveImage(_selectedStudioModel.imageUrl),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.person, size: 60, color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    )
                   else if (_userCustomPhotoUrl != null)
                     Positioned.fill(
                       child: ClipRRect(
@@ -1183,6 +1377,17 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
                         child: Image.memory(
                           base64Decode(_userCustomPhotoUrl!.split(',').last),
                           fit: BoxFit.cover,
+                        ),
+                      ),
+                    )
+                  else
+                    Center(
+                      child: Opacity(
+                        opacity: 0.35,
+                        child: Icon(
+                          _gender == 'female' ? Icons.woman : Icons.man,
+                          size: 280,
+                          color: Colors.grey.shade600,
                         ),
                       ),
                     ),
@@ -1306,7 +1511,7 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
           const SizedBox(height: 12),
 
           // CONTROLES DE AMBOS FORMATOS (Fotorrealista vs Interactivo)
-          if (_visualMode == 'photo' && _userCustomPhotoUrl != null) ...[
+          if ((_visualMode == 'photo' && _userCustomPhotoUrl != null) || _visualMode == 'model') ...[
             if (_vtonGeneratedImageUrl == null) ...[
               // Selector de modelo IA idéntico a la web
               Container(
@@ -1531,8 +1736,8 @@ class _VirtualTryonViewState extends State<VirtualTryonView> with SingleTickerPr
             ],
           ],
 
-          // Sliders de ajuste interactivo (cuando está en vista interactiva o maniquí)
-          if (!_showVtonResult || _vtonGeneratedImageUrl == null || _visualMode == 'mannequin')
+          // Sliders de ajuste interactivo (cuando está en vista interactiva, maniquí o modelo)
+          if (!_showVtonResult || _vtonGeneratedImageUrl == null || _visualMode == 'mannequin' || _visualMode == 'model')
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(

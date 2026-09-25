@@ -62,6 +62,14 @@ class Size(Base):
     category_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
 class Product(Base):
+    """
+    ========================================================================================
+    UML 2.5 / PATRÓN BCE: CLASE ENTIDAD <<Entity>> CE_Producto
+    Participa en Diagrama de Secuencia: CU07 - Registrar Producto
+      - Mensaje 3: CTR_Products ──► CE_Producto: 3: insert_product(datos)
+      - Mensaje 4: CE_Producto ──► CTR_Products: 4: ID Producto
+    ========================================================================================
+    """
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -95,6 +103,15 @@ class Product(Base):
     reviews: Mapped[List["ProductReview"]] = relationship("ProductReview", back_populates="product", cascade="all, delete-orphan")
 
 class ProductVariant(Base):
+    """
+    ========================================================================================
+    UML 2.5 / PATRÓN BCE: CLASE ENTIDAD <<Entity>> CE_Variante
+    Participa en Diagrama de Secuencia: CU07 - Registrar Producto
+      - Fragmento loop [Por cada variante]
+      - Mensaje 5: CTR_Products ──► CE_Variante: 5: insert_variants(variantes)
+      - Mensaje 6: CE_Variante ──► CTR_Products: 6: Confirmación
+    ========================================================================================
+    """
     __tablename__ = "product_variants"
 
     id: Mapped[int] = mapped_column(primary_key=True)

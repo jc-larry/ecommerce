@@ -37,7 +37,9 @@ def list_suppliers(
     """[CU08] Lista todos los proveedores registrados"""
     return db.query(Supplier).all()
 
+# [CU08 - Paso 1] (IU) El Personal Administrativo completa NIT y razón social del proveedor
 @router.post("", response_model=SupplierResponse, status_code=status.HTTP_201_CREATED)
+# [CU08 - Paso 2] / [DSC008 - Paso 2] +1. create_supplier(datos)
 def create_supplier(
     supplier_data: SupplierCreate,
     request: Request,
@@ -45,20 +47,21 @@ def create_supplier(
     current_user: User = Depends(admin_check)
 ):
     """[CU08] Registra un nuevo proveedor de mercadería"""
-    # [CU08 - Paso 3] / [DSC008 - Paso 3] +check_exists(nit)
+    # [CU08 - Paso 3] / [DSC008 - Paso 3] +2. check_exists(nit)
     existing = db.query(Supplier).filter(Supplier.nit == supplier_data.nit).first()
     if existing:
         raise HTTPException(status_code=400, detail="El NIT del proveedor ya se encuentra registrado.")
 
-    # [CU08 - Paso 4] / [DSC008 - Paso 4] +insert_supplier(datos)
+    # [CU08 - Paso 4] / [DSC008 - Paso 4] +3. insert_supplier(datos)
     supplier = Supplier(**supplier_data.model_dump())
     db.add(supplier)
+    # [CU08 - Paso 5] / [DSC008 - Paso 5] +4. commit_supplier()
     db.commit()
     db.refresh(supplier)
 
     # Auditar adición de proveedor (CU36)
     log_event(db, current_user.id, "INSERT", "suppliers", supplier.id, {"nit": supplier.nit, "name": supplier.name}, request.client.host)
-    # [CU08 - Paso 6] / [DSC008 - Paso 6] +Proveedor Creado
+    # [CU08 - Paso 6] / [DSC008 - Paso 6] +5. Proveedor Creado (HTTP 201 Created)
     return supplier
 
 @router.put("/{supplier_id}", response_model=SupplierResponse)

@@ -69,21 +69,22 @@ router = APIRouter(prefix="/api/v1/analytics", tags=["Inteligente y Analítica (
 # ===================================================================
 
 
+# [CU32 - Paso 1] (IU) El cliente elige una prenda y carga su fotografía en el probador virtual
 @router.post("/tryon/remove-background", response_model=RemoveBackgroundResponse)
+# [CU32 - Paso 2] / [DSC032 - Paso 2] +1. remove_background(image_base64)
 def remove_background(
     data: RemoveBackgroundRequest,
 ):
     """[CU32] Segmenta la figura humana y reemplaza el fondo por blanco puro (#FFFFFF).
-    # [CU32 - Paso 2] / [DSC032 - Paso 2] +remove_background(image_base64)
-    # [CU32 - Paso 3] / [DSC032 - Paso 3] +segment_human_silhouette_rembg()
-
     Utiliza la red neuronal rembg (u2net/isnet) para detección precisa del contorno
     corporal. Funciona con cualquier fondo arbitrario (alfombra roja, habitación, etc.).
     """
     import time
     start_time = time.time()
+    # [CU32 - Paso 3] / [DSC032 - Paso 3] +2. segment_human_silhouette_rembg()
     analysis = VirtualTryonAIService.analyze_person(data.image_base64)
     elapsed = round(time.time() - start_time, 2)
+    # [CU32 - Paso 3.2] / [DSC032 - Paso 3.2] +3. retornar_imagen_procesada_sin_fondo()
     return RemoveBackgroundResponse(
         processed_image_url=analysis["processed_image_url"],
         processing_time_sec=elapsed,
@@ -259,105 +260,24 @@ def get_garment_rig(
     return rig
 
 
-@router.post("/tryon/generate-vton", response_model=VTONGenerateResponse)
-def generate_vton_with_ai(
-    data: VTONGenerateRequest,
-    db: Session = Depends(get_db),
-):
-    """[CU32] Genera la prueba fotorrealista textil utilizando modelos generativos (IDM-VTON / Fashn.ai)."""
-    # [CU32 - Paso 4] / [DSC032 - Paso 4] +generate_vton(person_image, garment_image, model_choice)
-    # [CU32 - Paso 5] / [DSC032 - Paso 5] +cascade_vton_inference(FASHN -> IDM_VTON -> local_anatomico)
-    product = db.query(Product).filter(Product.id == data.product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
-
-    garment_img = data.garment_image
-    if not garment_img:
-        garment_img = product.images[0].image_url if product.images else "/assets/images/placeholder.png"
-
-    category_source = data.category
-    if product.category and product.category.name:
-        category_source = product.category.name
-    category = VirtualTryonAIService.normalize_category(category_source)
-
-    rec_size = data.recommended_size or "M"
-    garment_landmarks = VirtualTryonAIService.get_garment_landmarks(
-        product_tags=product.tags or "",
-        category_name=product.category.name if product.category else category,
-    )
-
-    # Invocar al servicio de inferencia VTON
-    ai_result = VirtualTryonAIService.generate_vton_look(
-        person_image_data=data.person_image,
-        garment_image_url=garment_img,
-        product_name=product.name,
-        category=category,
-        model_choice=data.model_choice,
-        recommended_size=rec_size,
-        garment_landmarks=garment_landmarks,
-    )
-
-    session = None
-    if data.session_token:
-        session = db.query(VirtualTryonSession).filter(VirtualTryonSession.session_token == data.session_token).first()
-
-    # Guardar la captura generada en la base de datos
-    vton_confidence = ai_result.get("mask_confidence")
-    if vton_confidence is None:
-        # Los motores VTON remotos devuelven su propia evaluación; la máscara
-        # local solo se persiste cuando fue calculada en este backend.
-        vton_confidence = 0.95
-    capture = VirtualTryonCapture(
-        session_id=session.id if session else None,
-        product_id=product.id,
-        variant_id=data.variant_id,
-        photo_url=ai_result["result_image_url"],
-        original_photo_url=data.person_image[:500] if data.person_image else None,
-        generation_model=ai_result["model_used"],
-        confidence_score=vton_confidence,
-        recommended_size=rec_size,
-    )
-    db.add(capture)
-    db.commit()
-    db.refresh(capture)
-
-    return VTONGenerateResponse(
-        capture_id=capture.id,
-        product_id=product.id,
-        product_name=product.name,
-        result_image_url=ai_result["result_image_url"],
-        original_photo_url=data.person_image if len(data.person_image) < 1000 else None,
-        generation_model=ai_result["model_used"],
-        processing_time_sec=ai_result["processing_time_sec"],
-        status="COMPLETED",
-        style_advice=ai_result["style_advice"],
-        mask_confidence=ai_result.get("mask_confidence"),
-        mask_reliable=ai_result.get("mask_reliable"),
-        mask_source=ai_result.get("mask_source"),
-        pose_confidence=ai_result.get("pose_confidence"),
-        pose_valid=ai_result.get("pose_valid"),
-        pose_source=ai_result.get("pose_source"),
-        pose_landmarks=ai_result.get("pose_landmarks"),
-        fit_mode=ai_result.get("fit_mode"),
-    )
-
-
+# [CU32 - Paso 4] / [DSC032 - Paso 4] +1. simulate_measurements(chest, waist, hips, height, weight)
 @router.post("/tryon/simulate", response_model=VirtualTryonResponse)
 def simulate_virtual_tryon(
     data: VirtualTryonRequest,
     db: Session = Depends(get_db),
 ):
     """[CU32] Simula la prueba de prenda en el vestidor virtual y recomienda talla según biometría."""
-    # [CU32 - Paso 3] / [DSC032 - Paso 3] +simulate_measurements(chest, waist, hips, height, weight)
-    # [CU32 - Paso 4] / [DSC032 - Paso 4] +calculate_recommended_size_and_fit_feedback()
     product = db.query(Product).filter(Product.id == data.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
 
-    # 1. Algoritmo biométrico de cálculo de talla
+    # [CU32 - Paso 4.1] / [DSC032 - Paso 4.1] +2. calculate_recommended_size_and_fit_feedback()
     rec_size = "M"
     fit_assessment = "Corte regular estándar"
     confidence = 0.92
+
+    effective_h = data.user_height_cm or data.height_cm
+    effective_w = data.user_weight_kg or data.weight_kg
 
     if data.chest_cm:
         if data.chest_cm < 88:
@@ -375,9 +295,9 @@ def simulate_virtual_tryon(
         else:
             rec_size = "XL"
             fit_assessment = "Talla confort para mayor libertad de movimiento."
-    elif data.user_height_cm and data.user_weight_kg:
-        h_m = data.user_height_cm / 100.0
-        bmi = data.user_weight_kg / (h_m * h_m)
+    elif effective_h and effective_w:
+        h_m = effective_h / 100.0
+        bmi = effective_w / (h_m * h_m)
         if bmi < 19.5:
             rec_size = "S"
             fit_assessment = "Silueta estilizada con ajuste definido."
@@ -437,11 +357,12 @@ def simulate_virtual_tryon(
     )
 
     measurements_dict = {
-        "height": data.user_height_cm,
-        "weight": data.user_weight_kg,
+        "height": effective_h,
+        "weight": effective_w,
         "chest": data.chest_cm,
         "waist": data.waist_cm,
         "hip": data.hip_cm,
+        "gender": data.gender or "female",
     }
 
     session = None
@@ -470,7 +391,7 @@ def simulate_virtual_tryon(
         category_name=product.category.name if product.category else "",
     )
     body_lm = VirtualTryonAIService.compute_body_landmarks(
-        height_cm=data.user_height_cm or 168,
+        height_cm=effective_h or 168,
         chest_cm=data.chest_cm or 90,
         waist_cm=data.waist_cm or 70,
         hip_cm=data.hip_cm or 94,
@@ -494,6 +415,88 @@ def simulate_virtual_tryon(
         garment_landmarks=garment_lm,
         body_landmarks=body_lm,
         created_at=capture.created_at,
+    )
+
+
+# [CU32 - Paso 5] / [DSC032 - Paso 5] +1. generate_vton(person_image, garment_image, model_choice)
+@router.post("/tryon/generate-vton", response_model=VTONGenerateResponse)
+def generate_vton_with_ai(
+    data: VTONGenerateRequest,
+    db: Session = Depends(get_db),
+):
+    """[CU32] Genera la prueba fotorrealista textil utilizando modelos generativos (IDM-VTON / Fashn.ai)."""
+    product = db.query(Product).filter(Product.id == data.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
+
+    garment_img = data.garment_image
+    if not garment_img:
+        garment_img = product.images[0].image_url if product.images else "/assets/images/placeholder.png"
+
+    category_source = data.category
+    if product.category and product.category.name:
+        category_source = product.category.name
+    category = VirtualTryonAIService.normalize_category(category_source)
+
+    rec_size = data.recommended_size or "M"
+    garment_landmarks = VirtualTryonAIService.get_garment_landmarks(
+        product_tags=product.tags or "",
+        category_name=product.category.name if product.category else category,
+    )
+
+    # [CU32 - Paso 5.1] / [DSC032 - Paso 5.1] +2. cascade_vton_inference(FASHN -> IDM_VTON -> local_anatomico)
+    ai_result = VirtualTryonAIService.generate_vton_look(
+        person_image_data=data.person_image,
+        garment_image_url=garment_img,
+        product_name=product.name,
+        category=category,
+        model_choice=data.model_choice,
+        recommended_size=rec_size,
+        garment_landmarks=garment_landmarks,
+    )
+
+    session = None
+    if data.session_token:
+        session = db.query(VirtualTryonSession).filter(VirtualTryonSession.session_token == data.session_token).first()
+
+    # Guardar la captura generada en la base de datos
+    vton_confidence = ai_result.get("mask_confidence")
+    if vton_confidence is None:
+        # Los motores VTON remotos devuelven su propia evaluación; la máscara
+        # local solo se persiste cuando fue calculada en este backend.
+        vton_confidence = 0.95
+    capture = VirtualTryonCapture(
+        session_id=session.id if session else None,
+        product_id=product.id,
+        variant_id=data.variant_id,
+        photo_url=ai_result["result_image_url"],
+        original_photo_url=data.person_image[:500] if data.person_image else None,
+        generation_model=ai_result["model_used"],
+        confidence_score=vton_confidence,
+        recommended_size=rec_size,
+    )
+    db.add(capture)
+    db.commit()
+    db.refresh(capture)
+
+    return VTONGenerateResponse(
+        capture_id=capture.id,
+        product_id=product.id,
+        product_name=product.name,
+        result_image_url=ai_result["result_image_url"],
+        original_photo_url=data.person_image if len(data.person_image) < 1000 else None,
+        generation_model=ai_result["model_used"],
+        processing_time_sec=ai_result["processing_time_sec"],
+        status="COMPLETED",
+        style_advice=ai_result["style_advice"],
+        mask_confidence=ai_result.get("mask_confidence"),
+        mask_reliable=ai_result.get("mask_reliable"),
+        mask_source=ai_result.get("mask_source"),
+        pose_confidence=ai_result.get("pose_confidence"),
+        pose_valid=ai_result.get("pose_valid"),
+        pose_source=ai_result.get("pose_source"),
+        pose_landmarks=ai_result.get("pose_landmarks"),
+        fit_mode=ai_result.get("fit_mode"),
     )
 
 
@@ -593,14 +596,14 @@ def _resolve_primary_product_image(p: Product) -> str:
     return "/uploads/products/blusa_peplum_blanca.png"
 
 
+# [CU33 - Paso 1] (IU) El cliente abre el widget del Asistente Virtual / Estilista IA
 @router.post("/chatbot/message", response_model=ChatbotMessageResponse)
+# [CU33 - Paso 2] / [DSC033 - Paso 2] +1. handle_chatbot_message(message, session_token)
 def handle_chatbot_message(
     data: ChatbotMessageRequest,
     db: Session = Depends(get_db),
 ):
     """[CU33] Motor conversacional del Asistente Virtual / Estilista IA con recomendaciones dinámicas."""
-    # [CU33 - Paso 2] / [DSC033 - Paso 2] +handle_chatbot_message(message, session_token)
-    # [CU33 - Paso 3] / [DSC033 - Paso 3] +classify_intent_and_extract_entities()
     msg = data.message.lower().strip()
     session_tok = data.session_token or uuid.uuid4().hex
 
@@ -609,6 +612,7 @@ def handle_chatbot_message(
     suggested_products = []
     actions = []
 
+    # [CU33 - Paso 3] / [DSC033 - Paso 3] +2. classify_intent_and_extract_entities()
     # 1. Detección de intenciones conversacionales y de atención al cliente
     if any(k in msg for k in ["hola", "buen dia", "buenas", "que tal", "inicio", "saludos"]):
         intent = "GREETING"
@@ -858,6 +862,7 @@ def handle_chatbot_message(
     ))
     db.commit()
 
+    # [CU33 - Paso 4] / [DSC033 - Paso 4] +3. generar_sugerencias_estilo() y retornar respuesta conversacional
     return ChatbotMessageResponse(
         reply=reply,
         session_token=session_tok,
@@ -871,16 +876,17 @@ def handle_chatbot_message(
 # CU34: BÚSQUEDA POR VOZ CON NLP
 # ===================================================================
 
+# [CU34 - Paso 1] (IU) El cliente activa el micrófono y dicta su búsqueda en IU_BusquedaVoz
 @router.post("/search/voice-nlp", response_model=VoiceSearchNLPResponse)
+# [CU34 - Paso 2] / [DSC034 - Paso 2] +1. search_catalog_voice_nlp(transcription)
 def search_catalog_voice_nlp(
     data: VoiceSearchNLPRequest,
     db: Session = Depends(get_db),
 ):
     """[CU34] Extrae entidades semánticas (prenda, color, precio, género) del texto transcrito por voz."""
-    # [CU34 - Paso 2] / [DSC034 - Paso 2] +search_catalog_voice_nlp(transcription)
-    # [CU34 - Paso 3] / [DSC034 - Paso 3] +extract_voice_facets(garment, color, gender, max_price)
     query = data.query_text.lower().strip()
 
+    # [CU34 - Paso 3] / [DSC034 - Paso 3] +2. extract_voice_facets(garment, color, gender, max_price)
     extracted = {
         "color": None,
         "garment": None,
@@ -916,6 +922,7 @@ def search_catalog_voice_nlp(
     if price_match:
         extracted["max_price"] = float(price_match.group(1))
 
+    # [CU34 - Paso 4] / [DSC034 - Paso 4] +3. ejecutar_busqueda_facetada_voz()
     # 5. Consulta dinámica en base de datos
     q = db.query(Product).filter(Product.is_active == True)
 
@@ -1054,15 +1061,16 @@ def export_kardex_csv(
     )
 
 
+# [CU35 - Paso 1] (IU) El Gerente accede al módulo de reportes gerenciales
 @router.get("/reports/top-selling", response_model=List[ManagerReportTopSellingItem])
+# [CU35 - Paso 2] / [DSC035 - Paso 2] +1. get_top_selling_products(limit)
 def get_top_selling_products(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Reporte de prendas más vendidas por volumen de unidades y facturación total."""
-    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_top_selling_products(limit)
-    # [CU35 - Paso 3] / [DSC035 - Paso 3] +aggregate_sales_by_product_volume_and_revenue()
+    # [CU35 - Paso 3] / [DSC035 - Paso 3] +2. aggregate_sales_by_product_volume_and_revenue()
     results = (
         db.query(
             ProductVariant.product_id,
@@ -1078,6 +1086,7 @@ def get_top_selling_products(
         .all()
     )
 
+    # [CU35 - Paso 4] / [DSC035 - Paso 4] +3. metricas_ventas: iteración y ensamblado de items
     items = []
     for pid, units, revenue in results:
         prod = db.query(Product).filter(Product.id == pid).first()
@@ -1095,17 +1104,18 @@ def get_top_selling_products(
                 image_url=img,
             )
         )
+    # [CU35 - Paso 5] / [DSC035 - Paso 5] +4. HTTP 200 OK (reporte_metrico) / mostrar_reporte_y_graficas
     return items
 
 
+# [CU35 - Paso 1.3] / [DSC035 - Paso 1.3] +1. get_executive_summary_voice()
 @router.get("/reports/executive-summary")
 def get_executive_summary_voice(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Genera un resumen ejecutivo de ventas y operaciones optimizado para síntesis de voz (TTS)."""
-    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_executive_summary_voice()
-    # [CU35 - Paso 3] / [DSC035 - Paso 3] +consolidate_sales_kpis_and_inventory()
+    # [CU35 - Paso 1.3.1] / [DSC035 - Paso 1.3.1] +2. consolidate_sales_kpis_and_inventory()
     total_revenue = db.query(func.sum(Order.total_amount)).filter(Order.status == "PAGADA").scalar() or 0.0
     total_orders = db.query(func.count(Order.id)).filter(Order.status == "PAGADA").scalar() or 0
     active_reservations = db.query(func.count(Reservation.id)).filter(Reservation.status.in_(["PENDING", "PREPARING", "READY"])).scalar() or 0
@@ -1127,6 +1137,7 @@ def get_executive_summary_voice(
     }
 
 
+# [CU35 - Paso 1.4] / [DSC035 - Paso 1.4] +1. get_product_sales_trend(product_id, months)
 @router.get("/reports/product-sales-trend", response_model=ProductSalesTrendResponse)
 def get_product_sales_trend(
     product_id: int = Query(..., description="ID de la prenda o producto"),
@@ -1135,8 +1146,7 @@ def get_product_sales_trend(
     current_user: User = Depends(get_current_user),
 ):
     """[CU35] Análisis histórico de demanda y ventas por prenda para decidir pedidos y reposición de stock."""
-    # [CU35 - Paso 2] / [DSC035 - Paso 2] +get_product_sales_trend(product_id, months)
-    # [CU35 - Paso 3] / [DSC035 - Paso 3] +compute_sales_velocity_and_stock_coverage()
+    # [CU35 - Paso 1.4.1] / [DSC035 - Paso 1.4.1] +2. compute_sales_velocity_and_stock_coverage()
     prod = db.query(Product).filter(Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Prenda no encontrada.")
@@ -1318,14 +1328,15 @@ def get_product_sales_trend(
 # CU39: DASHBOARD GLOBAL ANALÍTICO
 # ===================================================================
 
+# [CU39 - Paso 1] (IU) El Gerente abre el Dashboard Analítico Gerencial
 @router.get("/dashboard", response_model=AnalyticsDashboardResponse)
+# [CU39 - Paso 2] / [DSC039 - Paso 2] +1. get_analytics_dashboard()
 def get_analytics_dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """[CU39] Métricas globales en tiempo real y KPIs para el panel de control directivo."""
-    # [CU39 - Paso 2] / [DSC039 - Paso 2] +get_analytics_dashboard()
-    # [CU39 - Paso 3] / [DSC039 - Paso 3] +compute_multichannel_sales_and_inventory_kpis()
+    # [CU39 - Paso 3] / [DSC039 - Paso 3] +2. compute_multichannel_sales_and_inventory_kpis()
     # 1. Total ventas
     revenue_sum = db.query(func.sum(Order.total_amount)).filter(Order.status == "PAGADA").scalar() or 0.0
     orders_cnt = db.query(func.count(Order.id)).filter(Order.status == "PAGADA").scalar() or 0
@@ -1401,6 +1412,7 @@ def get_analytics_dashboard(
             "revenue": round(float(day_rev), 2)
         })
 
+    # [CU39 - Paso 4] / [DSC039 - Paso 4] +3. retornar_indicadores_kpi_tiempo_real()
     return AnalyticsDashboardResponse(
         total_sales_revenue=round(float(revenue_sum), 2),
         total_orders_count=orders_cnt,

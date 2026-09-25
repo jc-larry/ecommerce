@@ -98,29 +98,33 @@ def avisar_envio(db: Session, shipment: Shipment, estado: Optional[str] = None) 
               TIPO_ENVIO, shipment.id, "SHIPMENT")
 
 
+# [CU31 - Paso 1] (IU) El Superadministrador accede a la gestión de zonas y tarifas
 @router.get("/zones", response_model=List[DeliveryZoneResponse])
+# [CU31 - Paso 2] / [DSC031 - Paso 2] +1. list_delivery_zones()
 def list_delivery_zones(
     active_only: bool = Query(True, description="Mostrar solo zonas activas"),
     db: Session = Depends(get_db),
 ):
     """[CU31] Lista zonas de entrega y sus tarifas base por anillos y kilometraje."""
-    # [CU31 - Paso 2] / [DSC031 - Paso 2] +list_delivery_zones()
-    # [CU31 - Paso 3] / [DSC031 - Paso 3] +select_zones_by_distance()
+    # [CU31 - Paso 3] / [DSC031 - Paso 3] +2. select_zones_by_distance()
     query = db.query(DeliveryZone)
+    # [CU31 - Paso 4] / [DSC031 - Paso 4] +3. zones_list (recuperación de registros con filtro)
     if active_only:
         query = query.filter(DeliveryZone.is_active == True)
+    # [CU31 - Paso 5] / [DSC031 - Paso 5] +4. HTTP 200 OK (zones) / mostrar_mapa_y_anillos
     return query.order_by(DeliveryZone.min_distance_km.asc()).all()
 
 
+# [CU31 - Paso 7] (IU) El Administrador completa los datos del nuevo anillo/zona
 @router.post("/zones", response_model=DeliveryZoneResponse, status_code=status.HTTP_201_CREATED)
+# [CU31 - Paso 8] / [DSC031 - Paso 8] +1. create_delivery_zone(data)
 def create_delivery_zone(
     data: DeliveryZoneCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(central_check),
 ):
     """[CU31] Registrar una nueva zona de despacho y tarifa."""
-    # [CU31 - Paso 2] / [DSC031 - Paso 2] +create_delivery_zone(data)
-    # [CU31 - Paso 3] / [DSC031 - Paso 3] +insert(delivery_zone)
+    # [CU31 - Paso 9] / [DSC031 - Paso 9] +2. insert(delivery_zone)
     zone = DeliveryZone(
         name=data.name,
         city=data.city,
@@ -131,8 +135,10 @@ def create_delivery_zone(
         is_active=data.is_active,
     )
     db.add(zone)
+    # [CU31 - Paso 10] / [DSC031 - Paso 10] +3. zone_id (db.commit y refresh)
     db.commit()
     db.refresh(zone)
+    # [CU31 - Paso 11] / [DSC031 - Paso 11] +4. HTTP 201 Created / zona_agregada_al_mapa()
     return zone
 
 
@@ -157,13 +163,13 @@ def update_delivery_zone(
 
 
 @router.post("/calculate-rate", response_model=DeliveryRateCalculateResponse)
+# [CU31 - Paso 3.1] / [DSC031 - Paso 3.1] +1. calculate_shipping_rate(distance_km, zone_id)
 def calculate_shipping_rate(
     data: DeliveryRateCalculateRequest,
     db: Session = Depends(get_db),
 ):
     """[CU31] Calcula automáticamente el costo de flete según la distancia en kilómetros."""
-    # [CU31 - Paso 2] / [DSC031 - Paso 2] +calculate_shipping_rate(distance_km, zone_id)
-    # [CU31 - Paso 3] / [DSC031 - Paso 3] +match_zone_by_distance_or_extended_rate()
+    # [CU31 - Paso 3.2] / [DSC031 - Paso 3.2] +2. match_zone_by_distance_or_extended_rate()
     if data.zone_id:
         zone = db.query(DeliveryZone).filter(DeliveryZone.id == data.zone_id).first()
         if not zone:
@@ -214,7 +220,7 @@ def calculate_shipping_rate(
             distance_km=data.distance_km,
         )
 
-    # [CU31 - Paso 4] / [DSC031 - Paso 4] +Retornar costo de flete y tiempo estimado de entrega
+    # [CU31 - Paso 3.3] / [DSC031 - Paso 3.3] +3. return_shipping_rate_and_eta()
     return DeliveryRateCalculateResponse(
         zone_id=zone.id,
         zone_name=zone.name,
@@ -286,8 +292,7 @@ def create_shipment(
     current_user: User = Depends(dispatch_check),
 ):
     """[CU29] Crea la orden de despacho/envío para un pedido pagado y genera código de tracking."""
-    # [CU29 - Paso 2] / [DSC029 - Paso 2] +create_shipment(order_id, delivery_address, zone_id)
-    # [CU29 - Paso 3] / [DSC029 - Paso 3] +select_order_and_validate_branch(order_id)
+    # [CU29 - Op: Crear Despacho] +1. create_shipment(order_id, delivery_address, zone_id)
     order = db.query(Order).filter(Order.id == data.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado.")
@@ -295,7 +300,6 @@ def create_shipment(
     if own_branch is not None and order.branch_id != own_branch:
         raise HTTPException(status_code=403, detail="Solo puedes despachar pedidos de tu sucursal.")
 
-    # [CU29 - Paso 4] / [DSC029 - Paso 4] +generate_tracking_number(TRK-XXXXXXXX)
     tracking_num = f"TRK-{uuid.uuid4().hex[:8].upper()}"
 
     shipment = Shipment(
@@ -327,7 +331,6 @@ def create_shipment(
     avisar_envio(db, shipment, "CREADO")
     db.commit()
     db.refresh(shipment)
-    # [CU29 - Paso 5] / [DSC029 - Paso 5] +Retornar guía de despacho para la bolsa de repartidores
     return _build_shipment_response(shipment)
 
 
@@ -338,8 +341,7 @@ def list_shipments(
     current_user: User = Depends(dispatch_check),
 ):
     """[CU29] Despachos con trazabilidad. Un ENCARGADO solo ve los de su sucursal."""
-    # [CU29 - Paso 2] / [DSC029 - Paso 2] +list_shipments(branch_scope, status)
-    # [CU29 - Paso 3] / [DSC029 - Paso 3] +select_shipments_with_events()
+    # [CU29 - Op: Listar Despachos] +1. list_shipments(branch_scope, status)
     query = db.query(Shipment)
     own_branch = _manager_branch_or_403(current_user, db)
     if own_branch is not None:
@@ -371,8 +373,8 @@ def add_shipment_event(
     current_user: User = Depends(dispatch_check),
 ):
     """[CU29, CU30] Hito manual de Casa Matriz o del encargado de la sucursal de origen.
-    # [CU29 - Paso 5] / [DSC029 - Paso 5] / [CU30 - Paso 3] +add_shipment_event(status, location)
-    # [CU29 - Paso 6] / [DSC029 - Paso 6] +update_shipment_status_and_insert_event()
+    # [CU30 - Op: Evento Manual] +1. add_shipment_event(status, location)
+    # [CU30 - Op: Evento Manual] +2. update_shipment_status_and_insert_event()
 
     El repartidor no usa este endpoint: actualiza su ruta con /route-status y confirma la
     entrega con /confirm-delivery, que exige la foto de evidencia.
@@ -410,23 +412,25 @@ def add_shipment_event(
 # CU30: TRACKING TIMELINE POR CÓDIGO
 # ===================================================================
 
+# [CU30 - Paso 1] (IU) El cliente ingresa el código de rastreo en IU_RastreoEnvio
 @router.get("/track/{tracking_number}", response_model=ShipmentResponse)
+# [CU30 - Paso 2] / [DSC030 - Paso 2] +1. track_shipment(tracking_number)
 def track_shipment_public(
     tracking_number: str,
     db: Session = Depends(get_db),
 ):
     """[CU30] Consulta pública de trazabilidad en tiempo real mediante código de tracking."""
-    # [CU30 - Paso 2] / [DSC030 - Paso 2] +track_shipment_public(tracking_number)
-    # [CU30 - Paso 3] / [DSC030 - Paso 3] +select_shipment_tracking_timeline()
+    # [CU30 - Paso 3] / [DSC030 - Paso 3] +2. select_shipment_by_tracking_number()
     shipment = (
         db.query(Shipment)
         .filter(Shipment.tracking_number == tracking_number.strip().upper())
         .first()
     )
+    # [CU30 - Paso 4] / [DSC030 - Paso 4] +3. shipment_data: validación de existencia del paquete
     if not shipment:
         raise HTTPException(
             status_code=404,
             detail=f"No se encontró ningún paquete con el código de seguimiento '{tracking_number}'."
         )
-    # [CU30 - Paso 4] / [DSC030 - Paso 4] +Retornar línea de tiempo pública en vivo
+    # [CU30 - Paso 5] / [DSC030 - Paso 5] +4. select_tracking_events_timeline() y retorno HTTP 200 OK con timeline
     return _build_shipment_response(shipment)

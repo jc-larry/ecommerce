@@ -275,6 +275,11 @@ export class PosComponent implements OnInit, OnDestroy {
     }
   }
 
+  // =========================================================================
+  // [CU19] DIAGRAMA DE SECUENCIA UML 2.5: Procesar venta presencial en caja
+  // Actor: Cajero | Boundary: U_PuntoDeVentaPOS | Control: CTR_POS
+  // =========================================================================
+  // [CU19 - Paso 1] / [DSC019 - Paso 1] Cajero -> U_PuntoDeVentaPOS: ingresarCobro(session_id, items, total, medio, recibido, NIT)
   processSale(): void {
     if (!this.currentShift) {
       this.errorMessage = 'No hay una caja abierta en esta tienda. Para cobrar, primero debes abrir el turno indicando el fondo inicial con el que comienzas el día.';
@@ -315,6 +320,7 @@ export class PosComponent implements OnInit, OnDestroy {
     this.errorMessage = null;
     this.loading = true;
 
+    // Construcción del payload de cobro presencial en mostrador
     const payload: any = {
       channel: 'POS',
       branch_id: this.currentShift.branch_id,
@@ -338,8 +344,11 @@ export class PosComponent implements OnInit, OnDestroy {
       payload.qr_payment = { qr_reference: `QR-POS-${Date.now().toString().slice(-6)}` };
     }
 
+    // [CU19 - Paso 1.1] / [DSC019 - Paso 1.1] U_PuntoDeVentaPOS -> CTR_POS: POST /api/v1/pos/orders (payload)
     this.ventasService.processCheckout(payload).subscribe({
       next: (order) => {
+        // [CU19 - Retorno HTTP]: CTR_POS -> U_PuntoDeVentaPOS: HTTP 200 OK (order_id, change)
+        // [CU19 - Retorno IU]: U_PuntoDeVentaPOS -> Cajero: mostrarCambioYConfirmacion(vuelto, gaveta_abierta)
         this.lastOrderSuccess = order;
         this.ticketItems = [];
         this.loading = false;
@@ -355,6 +364,7 @@ export class PosComponent implements OnInit, OnDestroy {
     });
   }
 
+  // [CU19 - Paso 1.7] / [DSC019 - Paso 1.7] CTR_POS -> Dispositivo_Impresora: print_receipt(raw_thermal_data, width=80mm)
   printReceipt(): void {
     window.print();
   }

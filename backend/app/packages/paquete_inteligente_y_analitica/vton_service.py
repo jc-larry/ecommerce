@@ -911,7 +911,13 @@ class VirtualTryonAIService:
 
         parsed = urlparse(source)
         host = (parsed.hostname or "").lower()
-        if parsed.scheme in ("http", "https") and host not in ("localhost", "127.0.0.1", "::1"):
+        is_private = (
+            host in ("localhost", "127.0.0.1", "::1", "10.0.2.2", "0.0.0.0")
+            or host.startswith("192.168.")
+            or host.startswith("10.")
+            or host.startswith("172.")
+        )
+        if parsed.scheme in ("http", "https") and not is_private:
             return source
 
         img = cls._load_image(source)
@@ -994,8 +1000,18 @@ class VirtualTryonAIService:
                 header, encoded = source.split(",", 1)
                 b = base64.b64decode(encoded)
                 return Image.open(io.BytesIO(b)).convert("RGBA")
-            
-            # 2. URL remota HTTP / HTTPS
+
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+            # 2. Si la ruta contiene /uploads/, resolver directamente en disco local (evita fallos de 10.0.2.2 o loopback)
+            normalized_src = source.replace("\\", "/")
+            if "/uploads/" in normalized_src:
+                clean_rel = normalized_src.split("/uploads/", 1)[1]
+                local_path = os.path.join(backend_dir, "uploads", clean_rel.replace("/", os.sep))
+                if os.path.isfile(local_path):
+                    return Image.open(local_path).convert("RGBA")
+
+            # 3. URL remota HTTP / HTTPS
             if source.startswith("http://") or source.startswith("https://"):
                 r = requests.get(source, timeout=8.0)
                 if r.status_code == 200:

@@ -349,104 +349,484 @@ graph TD
 
 ## 2.2 Diagramas de comunicación
 
-**CU18 — Checkout con PayPal**
+Notación **Mermaid (flowchart LR)**: Actor (`:Actor`) · Interfaz (`<<boundary>> :IU_*`) · Control (`<<control>> :CTR_*`) · Entidad (`<<entity>> :CE_*`) y Servicios Externos (`<<external>>`); correspondencia 1:1 con la secuencia real de ventas, pagos, transferencias y cotizaciones.
+
+### CU12: Buscar y filtrar catálogo avanzado + disponibilidad por sucursal
 
 ```mermaid
 flowchart LR
-    C(("👤 Cliente"))
-    IU(["🖥️ IU_Checkout (web/app)"])
-    CTR_V(("⚙️ CTR_Ventas"))
-    CTR_P(("⚙️ CTR_PayPal · PayPalService"))
-    PP(("🌐 PayPal"))
-    CE_I[("🗄️ CE_Inventario")]
-    CE_O[("🗄️ CE_Orden/Items")]
-    CE_P[("🗄️ CE_Pago (STI)")]
-    CE_F[("🗄️ CE_Factura")]
-    CE_C[("🗄️ CE_Carrito")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    C -- "1: confirmar(sucursal, comprobante, PayPal)" --> IU
-    IU -- "2: createOrder(total Bs)" --> CTR_P
-    CTR_P -- "3: crear orden USD" --> PP
-    C -- "4: aprobar pago" --> PP
-    IU -- "5: captureOrder(id)" --> CTR_P
-    CTR_P -- "6: capturar" --> PP
-    IU -- "7: checkout(paypal_payment)" --> CTR_V
-    CTR_V -- "8: verify_completed_order" --> CTR_P
-    CTR_V -- "9: validar y descontar stock" --> CE_I
-    CTR_V -- "10: crear orden PAGADA" --> CE_O
-    CTR_V -- "11: registrar pago PAYPAL" --> CE_P
-    CTR_V -- "12: emitir comprobante IVA 13 %" --> CE_F
-    CTR_V -- "13: vaciar" --> CE_C
-    CTR_V -. "14: OrderResponse" .-> IU
+    C(("👤 :Cliente / Visitante")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_BusquedaCatalogo</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Catalogo</b>"]:::controlStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Producto</b>"]:::entityStyle
+    CE_V["&laquo;entity&raquo;<br/><b>:CE_VariantePrenda</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+
+    C -- "1: ingresarCriterios(texto, categoria_id, talla, color, precio_min/max, branch_id)" --> IU
+    IU -- "2: buscarProductosConStock(filtros)" --> CTR
+    CTR -- "3: select_active_products(categoria_id, precio_range, texto)" --> CE_P
+    CE_P -. "4: productos_base[]" .-> CTR
+    CTR -- "5: select_variants(product_ids, talla_id, color_id)" --> CE_V
+    CE_V -. "6: variantes_coincidentes[]" .-> CTR
+    CTR -- "7: select_stock_by_branch(variant_ids, branch_id)" --> CE_I
+    CE_I -. "8: existencias_por_sucursal[]" .-> CTR
+    CTR -. "9: HTTP 200 OK (items, catalogo_total, paginas, badge_stock)" .-> IU
+    IU -. "10: mostrarResultados(grilla, existencias, badges_disponibilidad)" .-> C
+    CTR -. "5a: HTTP 200 OK (items: [], total: 0)" .-> IU
+    IU -. "6a: mostrarMensaje('No se encontraron prendas con esos filtros')" .-> C
 ```
 
-**CU19 — Venta en POS**
+### CU13: Gestionar promociones: cupones y ofertas de temporada
 
 ```mermaid
 flowchart LR
-    Cj(("👤 Cajero"))
-    IU(["🖥️ IU_POS"])
-    CTR(("⚙️ CTR_Ventas"))
-    CE_T[("🗄️ CE_TurnoCaja")]
-    CE_I[("🗄️ CE_Inventario")]
-    CE_O[("🗄️ CE_Orden/Pago/Factura")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    Cj -- "1: buscar SKU / nombre" --> IU
-    IU -- "2: inventario de la sucursal" --> CE_I
-    Cj -- "3: cobrar(medio, NIT)" --> IU
-    IU -- "4: checkout(POS, cash_shift_id, pos_items)" --> CTR
-    CTR -- "5: turno ABIERTO del cajero en la sucursal" --> CE_T
-    CTR -- "6: descontar stock + ledger VENTA" --> CE_I
-    CTR -- "7: orden + pago + factura" --> CE_O
-    CTR -. "8: recibo (vuelto)" .-> IU
+    A(("👤 :Superadministrador")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_GestionPromociones</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Promociones</b>"]:::controlStyle
+    CE_C["&laquo;entity&raquo;<br/><b>:CE_Cupon</b>"]:::entityStyle
+    CE_B["&laquo;entity&raquo;<br/><b>:CE_BitacoraAuditoria</b>"]:::entityStyle
+
+    A -- "1: crearNuevoCupon(codigo, tipo_descuento, valor, start_date, end_date, max_usos)" --> IU
+    IU -- "2: POST /api/v1/promotions/coupons (payload)" --> CTR
+    CTR -- "3: check_code_exists(codigo)" --> CE_C
+    CE_C -. "4: exists = false" .-> CTR
+    CTR -- "5: insert_coupon(codigo, tipo, valor, start_date, end_date, max_uses, is_active=true)" --> CE_C
+    CE_C -. "6: coupon_id = 45" .-> CTR
+    CTR -- "7: insert_log(user_id, action='INSERT', table='coupons', row_id=45)" --> CE_B
+    CE_B -. "8: log_ok" .-> CTR
+    CTR -. "9: HTTP 201 Created (coupon_data)" .-> IU
+    IU -. "10: mostrarAlerta('Promoción programada con éxito en el calendario')" .-> A
+    CTR -. "5a: HTTP 400 Bad Request ('El código ya existe o el rango de fechas es inválido')" .-> IU
+    IU -. "6a: mostrarErrorValidacion()" .-> A
 ```
 
-**CU15 — Transferencia entre sucursales**
+### CU15: Gestionar inventario general y transferencias entre sucursales
 
 ```mermaid
 flowchart LR
-    E(("👤 Encargado"))
-    IU(["🖥️ IU_Transferencias"])
-    CTR(("⚙️ CTR_Inventario"))
-    CE_T[("🗄️ CE_Transferencia")]
-    CE_O[("🗄️ CE_Inventario origen")]
-    CE_D[("🗄️ CE_Inventario destino")]
-    CE_L[("🗄️ CE_LibroMayor")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    E -- "1: solicitar(origen, destino, ítems)" --> IU
-    IU -- "2: POST transfers" --> CTR
-    CTR -- "3: SOLICITADA" --> CE_T
-    E -- "4: despachar" --> IU
-    IU -- "5: status EN_TRANSITO" --> CTR
-    CTR -- "6: validar y descontar" --> CE_O
-    CTR -- "7: asentar salida" --> CE_L
-    E -- "8: confirmar recepción" --> IU
-    IU -- "9: status COMPLETADA" --> CTR
-    CTR -- "10: sumar stock" --> CE_D
-    CTR -- "11: asentar ingreso" --> CE_L
+    EO(("👤 :Encargado Sucursal Origen")):::actorStyle
+    ED(("👤 :Encargado Sucursal Destino")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Gestion_Inventario</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:Controlador_Traspasos_Inventario</b>"]:::controlStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario_Sucursal</b>"]:::entityStyle
+    CE_K["&laquo;entity&raquo;<br/><b>:Entidad_Kardex_Movimientos</b>"]:::entityStyle
+    CE_T["&laquo;entity&raquo;<br/><b>:Entidad_Traspaso_Mercaderia</b>"]:::entityStyle
+
+    EO -- "1: solicitarTraspaso(sucursal_origen, sucursal_destino, lista_prendas, cantidades)" --> IU
+    IU -- "2: registrarSolicitudTraspaso(datos_traspaso)" --> CTR
+    CTR -- "3: verificarStockDisponible(sucursal_origen, prendas)" --> CE_I
+    CE_I -. "4: stock_suficiente_confirmado" .-> CTR
+    CTR -- "5: crearRegistroTraspaso(estado='SOLICITADA', codigo='TRF-2026-001')" --> CE_T
+    CE_T -. "6: traspaso_id = 101" .-> CTR
+    CTR -. "7: confirmacionRegistro(traspaso_id=101)" .-> IU
+    IU -. "8: notificar('Solicitud de traspaso registrada exitosamente')" .-> EO
+    EO -- "9: despacharPrendasFisicas(traspaso_id=101)" --> IU
+    IU -- "10: procesarSalidaMercaderia(traspaso_id=101)" --> CTR
+    CTR -- "11: restarStockOrigen(sucursal_origen, prendas, cantidades)" --> CE_I
+    CE_I -. "12: stock_origen_descontado" .-> CTR
+    CTR -- "13: asentarMovimientoSalidaKardex(sucursal_origen, tipo='TRASPASO_SALIDA', ref='TRF-101')" --> CE_K
+    CE_K -. "14: asiento_salida_registrado" .-> CTR
+    CTR -- "15: actualizarEstadoTraspaso(traspaso_id=101, nuevo_estado='EN_TRANSITO')" --> CE_T
+    CE_T -. "16: estado_actualizado" .-> CTR
+    CTR -. "17: confirmacionDespacho()" .-> IU
+    IU -. "18: notificar('Mercadería en camino a sucursal destino')" .-> EO
+    ED -- "19: confirmarRecepcionFisica(traspaso_id=101)" --> IU
+    IU -- "20: procesarIngresoMercaderia(traspaso_id=101)" --> CTR
+    CTR -- "21: sumarStockDestino(sucursal_destino, prendas, cantidades)" --> CE_I
+    CE_I -. "22: stock_destino_incrementado" .-> CTR
+    CTR -- "23: asentarMovimientoIngresoKardex(sucursal_destino, tipo='TRASPASO_INGRESO', ref='TRF-101')" --> CE_K
+    CE_K -. "24: asiento_ingreso_registrado" .-> CTR
+    CTR -- "25: actualizarEstadoTraspaso(traspaso_id=101, nuevo_estado='COMPLETADA')" --> CE_T
+    CE_T -. "26: traspaso_finalizado" .-> CTR
+    CTR -. "27: confirmacionRecepcion()" .-> IU
+    IU -. "28: notificar('Prendas incorporadas al inventario de la sucursal')" .-> ED
 ```
 
-**CU22 — Devolución / cambio**
+### CU16: Configurar y notificar alertas de stock (mínimo/máximo)
 
 ```mermaid
 flowchart LR
-    E(("👤 Encargado"))
-    IU(["🖥️ IU_Devoluciones"])
-    CTR(("⚙️ CTR_Ventas"))
-    CE_O[("🗄️ CE_Orden")]
-    CE_R[("🗄️ CE_Devolucion")]
-    CE_I[("🗄️ CE_Inventario")]
-    CE_L[("🗄️ CE_LibroMayor")]
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
 
-    E -- "1: buscar orden" --> IU
-    IU -- "2: GET orders/{id}" --> CE_O
-    E -- "3: elegir prendas + tipo + motivo" --> IU
-    IU -- "4: POST returns" --> CTR
-    CTR -- "5: plazo ≤ 30 días y pertenencia" --> CE_O
-    CTR -- "6: DEV-… APROBADA" --> CE_R
-    CTR -- "7: reingresar (+ descontar cambio)" --> CE_I
-    CTR -- "8: DEVOLUCION_CLIENTE / VENTA" --> CE_L
+    T(("👤 :Trigger / Demonio Sistema")):::actorStyle
+    E(("👤 :Encargado Sucursal")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_BandejaAlertas</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_AlertasStock</b>"]:::controlStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    CE_A["&laquo;entity&raquo;<br/><b>:CE_AlertaStock</b>"]:::entityStyle
+
+    T -- "1: verify_inventory_thresholds(branch_id=1, variant_id=5)" --> CTR
+    CTR -- "2: select(branch_id=1, variant_id=5)" --> CE_I
+    CE_I -. "3: stock_actual=2, stock_minimo=5, stock_maximo=50" .-> CTR
+    CTR -- "4: insert_alert(branch_id=1, variant_id=5, type='STOCK_MINIMO', severity='CRITICA')" --> CE_A
+    CE_A -. "5: alert_id = 89" .-> CTR
+    CTR -. "6: notificacion_emitida" .-> T
+    E -- "7: abrirPanelNotificaciones(branch_id=1)" --> IU
+    IU -- "8: GET /api/v1/inventory/alerts?branch_id=1" --> CTR
+    CTR -- "9: select_unresolved(branch_id=1)" --> CE_A
+    CE_A -. "10: alerts_data[]" .-> CTR
+    CTR -. "11: HTTP 200 OK (alertas_con_variantes[])" .-> IU
+    IU -. "12: renderizarAlertas(insignia_roja, boton_transferencia_o_compra)" .-> E
 ```
+
+### CU17: Gestionar carrito de compra digital
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Carrito_Compras</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:Controlador_Carrito</b>"]:::controlStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario_Sucursal</b>"]:::entityStyle
+    CE_IC["&laquo;entity&raquo;<br/><b>:Entidad_Item_Carrito</b>"]:::entityStyle
+    CE_C["&laquo;entity&raquo;<br/><b>:Entidad_Carrito</b>"]:::entityStyle
+
+    C -- "1: agregarPrendaAlCarrito(variante_id=22, sucursal_id=1, cantidad=2)" --> IU
+    IU -- "2: registrarItemCarrito(usuario_id, variante_id=22, sucursal_id=1, cantidad=2)" --> CTR
+    CTR -- "3: consultarStockDisponible(sucursal_id=1, variante_id=22)" --> CE_I
+    CE_I -. "4: existencias_actuales = 5" .-> CTR
+    CTR -- "5: guardarOActualizarItem(carrito_id, variante_id=22, cantidad=2)" --> CE_IC
+    CE_IC -. "6: item_guardado" .-> CTR
+    CTR -- "7: recalcularTotales(carrito_id)" --> CE_C
+    CE_C -. "8: [subtotal: 350.00, descuento: 0.00, total: 350.00]" .-> CTR
+    CTR -. "9: respuestaExitosa(datos_carrito)" .-> IU
+    IU -. "10: actualizarVistaCarrito(articulos, total=Bs 350.00)" .-> C
+    CTR -. "5a: errorExistencias('Prenda temporalmente agotada en la sucursal seleccionada')" .-> IU
+    IU -. "6a: deshabilitarBotonYMostrarAlerta()" .-> C
+```
+
+### CU18: Procesar venta omnicanal (E-commerce / App Móvil)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Checkout</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:Controlador_Ventas</b>"]:::controlStyle
+    PAS["&laquo;external&raquo;<br/><b>:Pasarela_De_Pagos</b>"]:::externalStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario</b>"]:::entityStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:Entidad_Orden_Venta</b>"]:::entityStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:Entidad_Registro_Pago</b>"]:::entityStyle
+    CTR_F["&laquo;control&raquo;<br/><b>:Controlador_Facturacion</b>"]:::controlStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:Entidad_Factura_Fiscal</b>"]:::entityStyle
+    CE_NC["&laquo;entity&raquo;<br/><b>:Entidad_Nota_Credito</b>"]:::entityStyle
+    NOTIF["&laquo;control&raquo;<br/><b>:Servicio_Notificaciones_Push</b>"]:::controlStyle
+
+    C -- "1: confirmarCompra(modalidad_entrega, sucursal_id, direccion, medio_pago, nit_ci)" --> IU
+    IU -- "1.1a: fijarCostoEnvio(Bs 0.00) y fijarPlazoCustodia(48 horas)" --> IU
+    IU -- "1.1b: calcularTarifaEnvioPorZona(direccion) -> costo_envio = Bs 15.00" --> IU
+    IU -- "2: iniciarCheckoutConReserva(datos_checkout)" --> CTR
+    CTR -- "3: bloquearStockTemporal(sucursal_id, variantes, cantidades)" --> CE_I
+    CE_I -. "4: stock_bloqueado_ok" .-> CTR
+    CTR -- "5: registrarOrdenPendiente(estado='PENDIENTE_PAGO', session_timeout=300s)" --> CE_O
+    CE_O -. "6: orden_id = 450, expires_at = now + 5min" .-> CTR
+    CTR -. "7: sesionIniciada(orden_id=450, tiempo_restante=300s)" .-> IU
+    IU -- "8a: notificarExpiracionOVerificarTimeout(orden_id=450)" --> CTR
+    CTR -- "9a: liberarStockBloqueado(sucursal_id, variantes, cantidades)" --> CE_I
+    CE_I -. "10a: stock_liberado_a_disponible" .-> CTR
+    CTR -- "11a: anularOrden(estado='CANCELADA_TIMEOUT')" --> CE_O
+    CE_O -. "12a: orden_anulada" .-> CTR
+    CTR -- "13a: despacharAlertaPush('Sesión de pago expiró. No se realizó ningún cargo. Prendas liberadas.')" --> NOTIF
+    NOTIF -. "14a: alerta_enviada" .-> CTR
+    CTR -. "15a: ordenCanceladaPorTiempo()" .-> IU
+    IU -. "16a: mostrarPantallaExpiracionConBotonReintentar()" .-> C
+    IU -- "8b: procesarCobroPasarela(monto_total, token_autorizacion)" --> PAS
+    PAS -. "9b: cobro_confirmado(ref_pasarela)" .-> IU
+    IU -- "10b: confirmarPagoOrden(orden_id=450, ref_pasarela)" --> CTR
+    CTR -- "11b: descontarDefinitivamenteStock(sucursal_id, variantes)" --> CE_I
+    CE_I -. "12b: stock_descontado" .-> CTR
+    CTR -- "13b: registrarComprobantePago(orden_id=450, ref_pasarela, estado='CONFIRMADO')" --> CE_P
+    CE_P -. "14b: pago_registrado" .-> CTR
+    CTR -- "15b: emitirFacturaFiscal(orden_id=450, nit_ci, total, iva_13)" --> CTR_F
+    CTR_F -- "16b: persistirFactura(codigo_control, qr)" --> CE_F
+    CE_F -. "17b: factura_id = 310" .-> CTR_F
+    CTR_F -. "18b: factura_generada" .-> CTR
+    CTR -- "19b: fijarPlazoRetiro(pickup_deadline = now + 48h, estado='LISTO_RETIRO')" --> CE_O
+    CTR -- "20b: notificarCliente('Tu pedido está listo para recoger en sucursal. Plazo máximo: 48 horas.')" --> NOTIF
+    CTR -- "21b: reingresarStockASucursal(sucursal_id, variantes)" --> CE_I
+    CE_I -. "22b: stock_retornado_a_exhibicion" .-> CTR
+    CTR -- "23b: emitirNotaDeCredito(cliente_id, monto_total, motivo='EXPIRACION_RETIRO_48H')" --> CE_NC
+    CE_NC -. "24b: nota_credito_code = 'NC-2026-9812'" .-> CTR
+    CTR -- "25b: notificarCliente('Plazo de 48h vencido. Prenda reingresada a stock y se generó tu Nota de Crédito NC-2026-9812.')" --> NOTIF
+    CTR -- "19c: generarGuiaDespacho(direccion, tarifa_envio, estado='PREPARANDO_DESPACHO')" --> CE_O
+    CTR -. "26b: respuestaExitosa(orden_id=450, factura_id=310, modalidad_entrega)" .-> IU
+    IU -. "27b: mostrarPantallaExito(resumen_compra, boton_descargar_factura)" .-> C
+```
+
+### CU19: Procesar venta presencial en caja
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    Cajero(("👤 :Cajero")):::actorStyle
+    UI["&laquo;external&raquo;<br/><b>:U_PuntoDeVentaPOS</b>"]:::externalStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_POS</b>"]:::controlStyle
+    SC["&laquo;entity&raquo;<br/><b>:CE_SesionCaja</b>"]:::entityStyle
+    INV["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
+    ORD["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    MP["&laquo;entity&raquo;<br/><b>:CE_MedioDePago</b>"]:::entityStyle
+    FAC_CTR["&laquo;external&raquo;<br/><b>:CTR_Facturacion</b>"]:::externalStyle
+    FAC["&laquo;entity&raquo;<br/><b>:CE_Factura</b>"]:::entityStyle
+    PRN["&laquo;external&raquo;<br/><b>:Dispositivo_Impresora</b>"]:::externalStyle
+
+    Cajero -- "1: ingresarCobro(session_id=45, items, total=200.00, medio='EFECTIVO', recibido=250.00, NIT='1029384')" --> UI
+    UI -- "1.1: POST /api/v1/pos/orders (payload)" --> CTR
+    CTR -- "1.2: get_session(session_id=45)" --> SC
+    SC -. "1.2a: session_status = 'ABIERTA'" .-> CTR
+    CTR -- "1.3: insert_order(branch_id=1, channel='POS', total=200.00, status='COMPLETADO')" --> ORD
+    ORD -. "1.3a: order_id = 880" .-> CTR
+    CTR -- "1.4: deduct_stock(branch_id=1, items)" --> INV
+    INV -. "1.4a: stock_deducted_ok" .-> CTR
+    CTR -- "1.5: insert_payment(order_id=880, type='EFECTIVO', amount=200.00, cash_received=250.00, cash_change=50.00)" --> MP
+    MP -. "1.5a: pay_ok" .-> CTR
+    CTR -- "1.6: issue_invoice(order_id=880, nit='1029384', total=200.00)" --> FAC_CTR
+    FAC_CTR -- "1.6.1: insert(order_id=880, doc_type='FACTURA', subtotal=200.00, tax_amount=26.00)" --> FAC
+    FAC -. "1.6.1a: invoice_id = 512" .-> FAC_CTR
+    FAC_CTR -. "1.6.1b: invoice_data" .-> CTR
+    CTR -- "1.7: print_receipt(raw_thermal_data, width=80mm)" --> PRN
+    PRN -. "1.7a: print_ok" .-> CTR
+    CTR -. "1.8: HTTP 200 OK (order_id=880, change=50.00)" .-> UI
+    UI -. "1.9: mostrarCambioYConfirmacion(vuelto=Bs. 50.00, gaveta_abierta)" .-> Cajero
+```
+
+### CU20: Emitir factura y nota de entrega (IVA 13 %, código de control)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    POS["&laquo;external&raquo;<br/><b>:CTR_Ventas / POS</b>"]:::externalStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Facturacion</b>"]:::controlStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:CE_Factura</b>"]:::entityStyle
+    PDF["&laquo;control&raquo;<br/><b>:Servicio_GeneradorPDF</b>"]:::controlStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_VisorComprobantes</b>"]:::boundaryStyle
+
+    POS -- "1: generate_invoice(order_id=450, nit='489123019', name='Comercial SRL')" --> CTR
+    CTR -- "2: select_total(order_id=450)" --> CE_O
+    CE_O -. "3: total_amount = 520.00" .-> CTR
+    CTR -- "4: compute_control_code(nit, inv_num, date, key)" --> CTR
+    CTR -- "5: insert_invoice(order_id=450, doc_type='FACTURA', subtotal=520, tax=67.60, total=520, control_code='A4-5B-7C-1D')" --> CE_F
+    CE_F -. "6: invoice_id = 789" .-> CTR
+    CTR -- "4a: insert_invoice(order_id=450, doc_type='NOTA_ENTREGA', subtotal=520, tax=67.60, total=520, control_code=null)" --> CE_F
+    CE_F -. "5a: invoice_id = 790" .-> CTR
+    CTR -- "7: build_pdf(invoice_id, format='CARTA' o 'TICKET')" --> PDF
+    PDF -. "8: pdf_stream_bytes" .-> CTR
+    CTR -. "9: invoice_record(id, doc_type, pdf_url)" .-> POS
+    POS -- "10: disponibilizarDescarga(pdf_url)" --> IU
+    IU -. "11: url_lista_para_visor" .-> POS
+```
+
+### CU21: Generar y convertir cotización comercial
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cajero / Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_GenerarCotizacion</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Cotizaciones</b>"]:::controlStyle
+    CE_V["&laquo;entity&raquo;<br/><b>:CE_VariantePrenda</b>"]:::entityStyle
+    CE_Q["&laquo;entity&raquo;<br/><b>:CE_Cotizacion</b>"]:::entityStyle
+    CE_D["&laquo;entity&raquo;<br/><b>:CE_DetalleCotizacion</b>"]:::entityStyle
+    PDF["&laquo;control&raquo;<br/><b>:Servicio_GeneradorPDF</b>"]:::controlStyle
+
+    C -- "1: iniciarCotizacion(cliente_datos, vigencia_dias=15)" --> IU
+    IU -- "2: POST /api/v1/sales/quotations (payload)" --> CTR
+    CTR -- "3: get_variant_info(variant_id)" --> CE_V
+    CE_V -. "4: precio_base, descuento_vigente" .-> CTR
+    CTR -- "5: insert_quotation(cliente_datos, vigencia, status='VIGENTE')" --> CE_Q
+    CE_Q -. "6: quotation_id = 72, code = 'COT-2026-00072'" .-> CTR
+    CTR -- "7: insert_detail(quotation_id=72, variant_id, qty, unit_price)" --> CE_D
+    CE_D -. "8: ok" .-> CTR
+    CTR -- "9: build_quotation_pdf(quotation_id=72)" --> PDF
+    PDF -. "10: pdf_bytes, download_url" .-> CTR
+    CTR -. "11: HTTP 201 Created (code='COT-2026-00072', total=750.00, pdf_url)" .-> IU
+    IU -. "12: mostrarCotizacionGenerada(code, pdf_url)" .-> C
+```
+
+### CU22: Gestionar devoluciones y cambios de prendas
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cajero_Encargado")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Gestion_Devoluciones</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Devoluciones_Y_Cambios</b>"]:::controlStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:Entidad_Factura</b>"]:::entityStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:Entidad_Orden</b>"]:::entityStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario</b>"]:::entityStyle
+    CE_OD["&laquo;entity&raquo;<br/><b>:Entidad_OrdenDevolucion</b>"]:::entityStyle
+    CE_NC["&laquo;entity&raquo;<br/><b>:Entidad_NotaCredito</b>"]:::entityStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:Entidad_SesionCaja</b>"]:::entityStyle
+
+    C -- "1: ingresarCodigoFactura(codigo_factura='FAC-10024')" --> IU
+    IU -- "2: GET /api/v1/sales/invoices/by-code/FAC-10024" --> CTR
+    CTR -- "3: buscarFacturaConItems(codigo_factura)" --> CE_F
+    CE_F -. "4: {factura_id: 85, orden_id: 301, fecha: '2026-09-15', items: [{var_id: 14, nombre: 'Blusa Seda', precio: 220.00}]}" .-> CTR
+    CTR -. "5a: HTTP 400 Bad Request ('Plazo vencido: Han pasado más de 14 días (2 semanas) desde la compra')" .-> IU
+    IU -. "6a: mostrarInsigniaRojaBloqueo('Garantía Expirada - No procede devolución ni cambio')" .-> C
+    CTR -. "5b: HTTP 200 OK (items_factura, garantia_valida=true, dias_restantes)" .-> IU
+    IU -. "6b: mostrarPrendasCompradas(tabla_prendas, selector_accion)" .-> C
+    C -- "7a: solicitarCambioTalla(var_id_origen=14, talla_nueva='M')" --> IU
+    IU -- "8a: POST /api/v1/sales/returns (tipo='CAMBIO_TALLA', var_id=14, rep_id=18)" --> CTR
+    CTR -- "9a: reingresarStock(var_id=14, qty=+1) y descontarStock(var_id=18, qty=-1)" --> CE_I
+    CE_I -. "10a: inventario_actualizado_ok" .-> CTR
+    CTR -- "11a: registrarComprobante(tipo='CAMBIO_TALLA', diferencia=0.00)" --> CE_OD
+    CE_OD -. "12a: return_id = 91" .-> CTR
+    CTR -. "13a: cambioExitoso(return_id=91, diferencia=0.00)" .-> IU
+    IU -. "14a: emitirComprobanteCambioEntregaPrenda()" .-> C
+    C -- "7b: solicitarCambioModelo(var_id_origen=14, modelo_nuevo_var_id=32)" --> IU
+    IU -- "8b: POST /api/v1/sales/returns (tipo='CAMBIO_MODELO', var_id=14, rep_id=32)" --> CTR
+    CTR -- "9b: intercambiarStock(var_devuelta=+1, var_nueva=-1)" --> CE_I
+    CE_I -. "10b: stock_ajustado" .-> CTR
+    CTR -- "11b: cobrarDiferenciaEnCaja(monto_diferencia = Bs 50.00)" --> CE_S
+    CE_S -. "12b: cobro_asentado" .-> CTR
+    CTR -- "13b: registrarCambio(diferencia_cobrada = Bs 50.00)" --> CE_OD
+    CE_OD -. "14b: return_id = 92" .-> CTR
+    CTR -. "15b: cambioConfirmado(monto_a_cobrar=50.00)" .-> IU
+    IU -. "16b: cobrarDiferenciaYEntregarNuevaPrenda()" .-> C
+    CTR -- "11c: emitirNotaCredito(cliente_id, saldo_a_favor = Bs 40.00, motivo='CAMBIO_MODELO_MENOR_VALOR')" --> CE_NC
+    CE_NC -. "12c: codigo_nc = 'NC-2026-0045'" .-> CTR
+    CTR -- "13c: registrarCambio(nota_credito_id=45, saldo_a_favor=40.00)" --> CE_OD
+    CE_OD -. "14c: return_id = 93" .-> CTR
+    CTR -. "15c: cambioConfirmadoConNotaCredito(codigo_nc='NC-2026-0045', saldo=40.00)" .-> IU
+    IU -. "16c: imprimirNotaCreditoParaProximaCompraYEntregarPrenda()" .-> C
+    C -- "7c: solicitarDevolucion(var_id=14, motivo='Falla técnica')" --> IU
+    IU -- "8c: POST /api/v1/sales/returns (tipo='DEVOLUCION_DINERO', var_id=14)" --> CTR
+    CTR -- "9c: reingresarStockAInventario(var_id=14, qty=+1)" --> CE_I
+    CE_I -. "10c: stock_reingresado" .-> CTR
+    CTR -- "11d: generarNotaCreditoOReembolso(cliente_id, monto=220.00)" --> CE_NC
+    CE_NC -. "12d: comprobante_emitido" .-> CTR
+    CTR -. "13d: devolucionProcesada()" .-> IU
+    IU -. "14d: comprobanteFinalizado()" .-> C
+```
+
+### CU23: Gestionar arqueo de caja (apertura y cierre ciego)
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cajero")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_ArqueoCaja</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Arqueo</b>"]:::controlStyle
+    CE_S["&laquo;entity&raquo;<br/><b>:CE_SesionCaja</b>"]:::entityStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_MedioDePago</b>"]:::entityStyle
+    CE_D["&laquo;entity&raquo;<br/><b>:CE_OrdenDevolucion</b>"]:::entityStyle
+
+    C -- "1: abrirTurno(monto_inicial_efectivo=200.00)" --> IU
+    IU -- "2: POST /api/v1/sales/shifts/open (user_id, branch_id=1, opening_amount=200.00)" --> CTR
+    CTR -- "3: check_active_sessions(user_id)" --> CE_S
+    CE_S -. "4: active_sessions = 0" .-> CTR
+    CTR -- "5: insert(user_id, branch_id=1, opening_amount=200.00, status='ABIERTA')" --> CE_S
+    CE_S -. "6: session_id = 45" .-> CTR
+    CTR -. "7: HTTP 201 Created (session_id=45)" .-> IU
+    IU -. "8: habilitarModuloPOS()" .-> C
+    C -- "9: cerrarTurno(session_id=45, monto_declarado_cajero=1450.00)" --> IU
+    IU -- "10: POST /api/v1/sales/shifts/45/close (declared_amount=1450.00)" --> CTR
+    CTR -- "11: sum_cash_sales_by_session(session_id=45)" --> CE_P
+    CE_P -. "12: ventas_efectivo = 1430.00" .-> CTR
+    CTR -- "13: sum_cash_refunds_by_session(session_id=45)" --> CE_D
+    CE_D -. "14: devoluciones_efectivo = 180.00" .-> CTR
+    CTR -- "15: update(45, declared=1450.00, expected=1450.00, diff=0.00, status='CERRADA')" --> CE_S
+    CE_S -. "16: session_closed_ok" .-> CTR
+    CTR -. "17: HTTP 200 OK (reporte_arqueo)" .-> IU
+    IU -. "18: imprimirArqueo(diferencia=0.00, status='CUADRADO')" .-> C
+```
+
+### CU24: Consultar historial de compras
+
+```mermaid
+flowchart LR
+    classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
+    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
+    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+
+    C(("👤 :Cliente")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_HistorialCompras</b>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Historial</b>"]:::controlStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
+    CE_IO["&laquo;entity&raquo;<br/><b>:CE_ItemOrden</b>"]:::entityStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_MedioDePago</b>"]:::entityStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:CE_Factura</b>"]:::entityStyle
+
+    C -- "1: presionarPestanaMisCompras()" --> IU
+    IU -- "2: GET /api/v1/sales/orders/my-orders (token_jwt)" --> CTR
+    CTR -- "3: select_orders_by_user(user_id, order_by_created_at_desc)" --> CE_O
+    CE_O -. "4: orders_summary[]" .-> CTR
+    CTR -. "5: HTTP 200 OK (orders_list)" .-> IU
+    IU -. "6: renderizarTarjetasPedidos(num_orden, fecha, total_bs, canal)" .-> C
+    C -- "7: verDetalleOrden(order_id=450)" --> IU
+    IU -- "8: GET /api/v1/sales/orders/450" --> CTR
+    CTR -- "9: select_items_with_product(order_id=450)" --> CE_IO
+    CE_IO -. "10: items[(sku, product_name, color, size, price, qty)]" .-> CTR
+    CTR -- "11: select_payment_details(order_id=450)" --> CE_P
+    CE_P -. "12: payment_type: 'TARJETA', last4: '4512'" .-> CTR
+    CTR -- "13: select_invoice(order_id=450)" --> CE_F
+    CE_F -. "14: doc_type: 'FACTURA', total: 520.00, pdf_path: '/pdf/0450.pdf'" .-> CTR
+    CTR -. "15: HTTP 200 OK (order_complete_profile)" .-> IU
+    IU -. "16: mostrarModalDetalle(prendas, desglose_iva, descargar_factura)" .-> C
+    C -- "17: presionarDescargarFactura()" --> IU
+    IU -. "18: descargarArchivoPDF(Factura_ORD-450.pdf)" .-> C
+```
+
 
 ## 2.3 Clases de análisis
 

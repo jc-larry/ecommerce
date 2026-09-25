@@ -164,6 +164,19 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     return this.catalogoService.resolveImageUrl(url);
   }
 
+  get activeGarmentImageUrl(): string {
+    if (!this.selectedProduct) return '/assets/images/placeholder.png';
+    if (this.selectedVariant && this.selectedProduct.images) {
+      const match = this.selectedProduct.images.find(img => img.color_id === this.selectedVariant?.color_id);
+      if (match?.image_url) return this.resolveImg(match.image_url);
+    }
+    if (this.selectedProduct.images && this.selectedProduct.images.length > 0) {
+      const primary = this.selectedProduct.images.find(img => img.is_primary) || this.selectedProduct.images[0];
+      return this.resolveImg(primary.image_url);
+    }
+    return '/assets/images/placeholder.png';
+  }
+
   // Talla 100% dinámica calculada según medidas corporales (no fija en S)
   get calculatedSize(): string {
     if (this.chestCm < 86) return 'XS';
@@ -224,6 +237,9 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     this.initSession();
     this.loadBranches();
     this.loadProducts();
+    if (this.selectedRealModel) {
+      this.selectRealModel(this.selectedRealModel);
+    }
   }
 
   ngOnDestroy(): void {
@@ -350,7 +366,8 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
       const match = variants.find(v => v.id === preferredVariantId);
       this.selectedVariant = match || (variants.length > 0 ? variants[0] : null);
     } else {
-      this.selectedVariant = variants.length > 0 ? variants[0] : null;
+      const sizeMatch = variants.find(v => v.size?.name === this.calculatedSize);
+      this.selectedVariant = sizeMatch || (variants.length > 0 ? variants[0] : null);
     }
 
     // Registrar automáticamente la prueba de la prenda en la sesión activa
@@ -496,18 +513,60 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
       });
       await this.ensurePoseLandmarker();
       this.isCameraActive = true;
-      setTimeout(() => {
-        if (this.videoPlayer && this.videoPlayer.nativeElement) {
+      const bindVideo = () => {
+        if (this.videoPlayer?.nativeElement && this.mediaStream) {
           this.videoPlayer.nativeElement.srcObject = this.mediaStream;
-          this.videoPlayer.nativeElement.play();
+          this.videoPlayer.nativeElement.play().catch(() => {});
           this.startLiveVideoTracking();
+        } else if (this.isCameraActive) {
+          setTimeout(bindVideo, 100);
         }
-      }, 150);
+      };
+      setTimeout(bindVideo, 100);
     } catch (err: any) {
       this.cameraError = 'No se pudo activar la cámara web. Asegúrate de otorgar permisos o sube una fotografía.';
       this.isCameraActive = false;
       this.imageSource = 'mannequin';
     }
+  }
+
+  captureSnapshot(): void {
+    if (!this.videoPlayer?.nativeElement || !this.captureCanvas?.nativeElement) return;
+    const video = this.videoPlayer.nativeElement;
+    const canvas = this.captureCanvas.nativeElement;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (this.mirrorView) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+    this.stopWebcam();
+    this.imageSource = 'upload';
+    this.originalPersonImageUrl = dataUrl;
+    this.uploadedPhotoUrl = dataUrl;
+    this.selectedRealModel = null;
+    this.activeViewMode = 'ar';
+
+    this.isRemovingBg = true;
+    this.analiticaService.removeBackground(dataUrl).subscribe({
+      next: (res: RemoveBackgroundResult) => {
+        if (res && res.processed_image_url) {
+          this.uploadedPhotoUrl = res.processed_image_url;
+        }
+        this.isRemovingBg = false;
+        this.runSimulation();
+      },
+      error: () => {
+        this.isRemovingBg = false;
+        this.runSimulation();
+      }
+    });
   }
 
   /**
@@ -871,23 +930,6 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     this.poseSmoother.reset();
   }
 
-  captureSnapshot(): void {
-    if (!this.videoPlayer || !this.captureCanvas) return;
-    const video = this.videoPlayer.nativeElement;
-    const canvas = this.captureCanvas.nativeElement;
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 1080;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      this.uploadedPhotoUrl = canvas.toDataURL('image/jpeg', 0.92);
-      this.originalPersonImageUrl = this.uploadedPhotoUrl;
-      this.stopWebcam();
-      this.imageSource = 'upload';
-      this.runSimulation();
-    }
-  }
-
   // 3. Calibración interactiva de la prenda
   adjustScale(delta: number): void {
     this.overlayScale = Math.min(1.8, Math.max(0.5, +(this.overlayScale + delta).toFixed(2)));
@@ -914,7 +956,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     if (!this.selectedProduct) return;
     const activePersonImage = this.getActivePersonImageUrl();
     if (!activePersonImage) {
-      this.errorMsg = 'Debes tomarte una foto con la cámara o subir una foto para generar la prueba con IDM-VTON.';
+      this.errorMsg = 'Debes seleccionar una modelo, tomarte una foto con la cámara o subir una foto para generar la prueba con IA.';
       return;
     }
 
@@ -922,11 +964,7 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
     this.errorMsg = '';
     this.successMsg = '';
 
-    const rawGarment = (this.selectedProduct.images && this.selectedProduct.images.length > 0)
-      ? this.selectedProduct.images[0].image_url
-      : '';
-    const garmentImg = this.resolveImg(rawGarment);
-
+    const garmentImg = this.activeGarmentImageUrl;
     const catName = this.isDressOrOnePiece ? 'one-pieces' : (this.isBottom ? 'bottoms' : 'tops');
 
     this.analiticaService.generateVTON({
@@ -959,8 +997,11 @@ export class VirtualTryonComponent implements OnInit, OnDestroy {
   }
 
   getActivePersonImageUrl(): string {
-    if ((this.imageSource === 'upload' || this.imageSource === 'model') && this.originalPersonImageUrl) {
-      return this.originalPersonImageUrl;
+    if (this.imageSource === 'upload' && this.uploadedPhotoUrl) {
+      return this.uploadedPhotoUrl;
+    }
+    if (this.imageSource === 'model') {
+      return this.resolveImg(this.selectedRealModel?.imageUrl || REAL_MODELS[0].imageUrl);
     }
     return '';
   }

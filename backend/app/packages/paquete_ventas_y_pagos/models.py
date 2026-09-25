@@ -22,7 +22,16 @@ from app.packages.paquete_seguridad_usuarios.models import User
 
 
 class Order(Base):
-    """[CU17-CU19] Cabecera de pedido (canal ONLINE o POS presencial)."""
+    """
+    [CU17 / CU18 / CU19] CE_Orden: Entidad cabecera de pedido / venta omnicanal (ONLINE y POS).
+    
+    Atributos destacados de Casos de Uso:
+      - CU18: Venta Omnicanal con modalidades de entrega:
+        * delivery_type: 'ENVIO_DOMICILIO' (con guía CU29) vs. 'RETIRO_TIENDA' (custodia en sucursal).
+        * pickup_deadline: Plazo estricto de 48 horas para recojo en tienda física antes de que retorne a exhibición.
+        * payment_session_expires_at: Temporizador de 5 minutos (300 segundos) para confirmación en pasarela.
+      - CU19: Venta Presencial POS vinculada a turno de caja (cash_shift_id).
+    """
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,6 +44,9 @@ class Order(Base):
     coupon_code: Mapped[Optional[str]] = mapped_column(String(30))
     total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     cash_shift_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cash_shifts.id", ondelete="SET NULL"), nullable=True)
+    delivery_type: Mapped[str] = mapped_column(String(20), default='ENVIO_DOMICILIO', nullable=False)
+    pickup_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    payment_session_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped[User] = relationship()
@@ -65,29 +77,30 @@ class OrderItem(Base):
 
 
 class Payment(Base):
-    """[CU18] Medio de pago — clase base de la jerarquía (Single Table Inheritance).
+    """[CU18, CU19] CE_MedioDePago: Entidad de pago — clase base de la jerarquía (Single Table Inheritance).
 
     `MedioDePago` ⭅ Efectivo / Tarjeta / QR / Crédito. El discriminador es `payment_type`.
+    En CU19 [Paso 1.5] insert_payment(order_id, type='EFECTIVO', amount, cash_received, cash_change) registra el pago en efectivo y cambio.
     """
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
-    payment_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    payment_type: Mapped[str] = mapped_column(String(20), nullable=False)  # EFECTIVO, TARJETA, QR, PAYPAL, CREDITO
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="CONFIRMADO", nullable=False)
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    # Columnas específicas de subtipos (anulables)
-    cash_received: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
-    cash_change: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
-    card_brand: Mapped[Optional[str]] = mapped_column(String(20))
-    card_last4: Mapped[Optional[str]] = mapped_column(String(4))
-    gateway_reference: Mapped[Optional[str]] = mapped_column(String(80))
-    qr_reference: Mapped[Optional[str]] = mapped_column(String(80))
-    paypal_payer_id: Mapped[Optional[str]] = mapped_column(String(50))
-    paypal_payer_email: Mapped[Optional[str]] = mapped_column(String(100))
-    credit_due_date: Mapped[Optional[date]] = mapped_column(Date)
+    # Atributos específicos según subclase (STI)
+    cash_received: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))  # Efectivo
+    cash_change: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))    # Efectivo
+    card_brand: Mapped[Optional[str]] = mapped_column(String(20))          # Tarjeta
+    card_last4: Mapped[Optional[str]] = mapped_column(String(4))           # Tarjeta
+    gateway_reference: Mapped[Optional[str]] = mapped_column(String(100))  # Tarjeta / Pasarela
+    qr_reference: Mapped[Optional[str]] = mapped_column(String(100))       # QR
+    paypal_payer_id: Mapped[Optional[str]] = mapped_column(String(50))     # PayPal
+    paypal_payer_email: Mapped[Optional[str]] = mapped_column(String(100)) # PayPal
+    credit_due_date: Mapped[Optional[date]] = mapped_column(Date)          # Crédito
 
     order: Mapped[Order] = relationship("Order", back_populates="payments")
 
@@ -98,6 +111,7 @@ class Payment(Base):
 
 
 class EfectivoPayment(Payment):
+    """[CU19] CE_MedioDePago (Efectivo): Registra monto pagado, efectivo recibido y cambio entregado (Paso 1.5)."""
     __mapper_args__ = {"polymorphic_identity": "EFECTIVO"}
 
 
@@ -118,7 +132,9 @@ class CreditoPayment(Payment):
 
 
 class Invoice(Base):
-    """[CU20] Comprobante — `Comprobante` ⭅ Factura / NotaDeEntrega. IVA 13 %."""
+    """[CU19, CU20] CE_Factura: Comprobante fiscal computarizado con desglose del 13% IVA y código de control.
+    En CU19 [Paso 1.6.1] CTR_Facturacion -> CE_Factura: insert(order_id, doc_type='FACTURA', subtotal, tax_amount).
+    """
     __tablename__ = "invoices"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -137,7 +153,9 @@ class Invoice(Base):
 
 
 class CashShift(Base):
-    """[CU23] Turno de caja (apertura, operaciones y arqueo de cierre a ciegas)."""
+    """[CU19, CU23] CE_SesionCaja: Entidad de Turno y Sesión de Caja registradora (apertura, operaciones y arqueo).
+    En CU19 [Paso 1.2] CTR_POS -> CE_SesionCaja: get_session(session_id) verifica session_status == 'ABIERTA'.
+    """
     __tablename__ = "cash_shifts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -220,22 +238,61 @@ class QuotationItem(Base):
     variant: Mapped[ProductVariant] = relationship("ProductVariant")
 
 
+class CreditNote(Base):
+    """
+    [CU22 / CU18] CE_NotaDeCredito: Saldo a favor del cliente para compras posteriores.
+    
+    Casos de Uso de Aplicación:
+      - [CU22 - Paso 4]: Cambio por modelo donde la prenda elegida tiene menor precio que la original.
+        Por política comercial no se reembolsa efectivo; se emite una Nota de Crédito reutilizable.
+      - [CU18 - Flujo Alterno B]: Expiración de custodia por retiro en sucursal (48 horas vencidas).
+        La prenda retorna al inventario general y se protege el dinero del cliente con una Nota de Crédito.
+    """
+    __tablename__ = "credit_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    credit_note_code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    order_id: Mapped[Optional[int]] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), nullable=True)
+    return_id: Mapped[Optional[int]] = mapped_column(ForeignKey("order_returns.id", ondelete="SET NULL"), nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="VIGENTE", nullable=False)  # 'VIGENTE' | 'APLICADA' | 'ANULADA'
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship("User")
+    order: Mapped[Optional[Order]] = relationship("Order")
+
+
 class OrderReturn(Base):
-    """[CU22] Devolución o cambio de prendas."""
+    """
+    [CU22] CE_Devolucion: Registro formal de cambio o devolución de prendas.
+    
+    Subflujos Soportados:
+      - 'CAMBIO_TALLA': Mismo producto en diferente talla (Diferencia: Bs. 0.00).
+      - 'CAMBIO_MODELO': Prenda de modelo diferente.
+        * Si el precio es mayor: difference_amount > 0 (cobro de saldo en caja/pasarela).
+        * Si el precio es menor: difference_amount < 0 (emite CE_NotaDeCredito, cero efectivo).
+      - 'DEVOLUCION_DINERO': Reembolso formal previo control de calidad y límite de 14 días.
+    """
     __tablename__ = "order_returns"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     return_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False)
     processed_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
-    return_type: Mapped[str] = mapped_column(String(25), nullable=False)  # 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA'
+    return_type: Mapped[str] = mapped_column(String(25), nullable=False)  # 'DEVOLUCION_DINERO' | 'CAMBIO_PRENDA' | 'CAMBIO_TALLA' | 'CAMBIO_MODELO'
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
     refund_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    difference_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    credit_note_id: Mapped[Optional[int]] = mapped_column(ForeignKey("credit_notes.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="APROBADA", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     order: Mapped[Order] = relationship("Order")
     processed_by: Mapped[User] = relationship("User")
+    credit_note: Mapped[Optional[CreditNote]] = relationship("CreditNote", foreign_keys=[credit_note_id])
     items: Mapped[List["OrderReturnItem"]] = relationship("OrderReturnItem", back_populates="order_return", cascade="all, delete-orphan")
 
 

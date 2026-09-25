@@ -138,7 +138,7 @@ class _LoginViewState extends State<LoginView> {
                 controller: controller,
                 decoration: InputDecoration(
                   labelText: 'URL de la API',
-                  hintText: 'http://10.10.151.229:8000/api/v1',
+                  hintText: 'http://10.10.150.139:8000/api/v1',
                   prefixIcon: const Icon(Icons.link),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

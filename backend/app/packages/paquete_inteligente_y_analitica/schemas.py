@@ -135,9 +135,12 @@ class VirtualTryonRequest(BaseModel):
     photo_base64: Optional[str] = None
     user_height_cm: Optional[float] = Field(None, ge=100, le=250)
     user_weight_kg: Optional[float] = Field(None, ge=30, le=250)
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
     chest_cm: Optional[float] = None
     waist_cm: Optional[float] = None
     hip_cm: Optional[float] = None
+    gender: Optional[str] = "female"
 
 
 class VirtualTryonResponse(BaseModel):

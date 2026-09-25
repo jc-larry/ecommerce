@@ -227,17 +227,18 @@ def log_event(db: Session, user_id: int, action: str, table: str, row_id: int, d
             pass
 
 # --- ENDPOINTS: AUTENTICACIÓN ---
+# [CU01 - Paso 1] (IU) El usuario ingresa sus credenciales en IU_Login
 @router.post("/auth/login", response_model=TokenResponse)
+# [CU01 - Paso 2] / [DSC001 - Paso 2] +1. login(email, password)
 def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
     """[CU01] Inicio de sesión unificado"""
-    # [CU01 - Paso 2] / [DSC001 - Paso 2] +login(email, password)
-    # [CU01 - Paso 3] / [DSC001 - Paso 3] +select_where(email)
     # El correo ya viene normalizado a minúsculas por el schema; la contraseña se limpia de
     # espacios accidentales del teclado/autocompletado (sin recortar espacios internos).
     email = login_data.email
     password = login_data.password.strip()
+    # [CU01 - Paso 3] / [DSC001 - Paso 3] +2. select_where(email)
     user = db.query(User).filter(User.email == email).first()
-    # [CU01 - Paso 4] / [DSC001 - Paso 4] +Datos y Hash (verificación implícita)
+    # [CU01 - Paso 4] / [DSC001 - Paso 4] +3. Datos y Hash (verificación implícita)
     if not user:
         print(f"[LOGIN] Rechazado: el correo '{email}' NO está registrado en esta base de datos.")
         raise HTTPException(status_code=400, detail="Correo electrónico o contraseña incorrectos.")
@@ -247,7 +248,7 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Cuenta de usuario desactivada.")
 
-    # [CU01 - Paso 5] / [DSC001 - Paso 5] +create_token()
+    # [CU01 - Paso 5] / [DSC001 - Paso 5] +4. create_token()
     token = create_access_token(subject=user.id)
     expires = datetime.now(timezone.utc) + timedelta(minutes=60)
 
@@ -266,7 +267,7 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
     log_event(db, user.id, "LOGIN", "users", user.id, {"email": user.email}, request.client.host)
 
     roles = [r.name for r in user.roles]
-    # [CU01 - Paso 6] / [DSC001 - Paso 6] +Token JWT
+    # [CU01 - Paso 6] / [DSC001 - Paso 6] +5. Token JWT
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -274,17 +275,18 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
         "user": user
     }
 
+# [CU04 - Paso 1] (IU) El cliente completa el formulario de registro en IU_Registro
 @router.post("/auth/register", response_model=UserResponse)
+# [CU04 - Paso 2] / [DSC004 - Paso 2] +1. register(datos)
 def register(reg_data: UserRegister, request: Request, db: Session = Depends(get_db)):
     """[CU04] Auto-registro autónomo de clientes"""
-    # [CU04 - Paso 2] / [DSC004 - Paso 2] +register(datos)
-    # [CU04 - Paso 3] / [DSC004 - Paso 3] +check_exists(email)
+    # [CU04 - Paso 3] / [DSC004 - Paso 3] +2. check_exists(email)
     existing = db.query(User).filter(User.email == reg_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="El correo electrónico ya se encuentra registrado.")
-    # [CU04 - Paso 4] / [DSC004 - Paso 4] +No existe (si pasa validación)
+    # [CU04 - Paso 4] / [DSC004 - Paso 4] +3. No existe (si pasa validación)
 
-    # [CU04 - Paso 5] / [DSC004 - Paso 5] +insert(datos, rol='CLIENTE')
+    # [CU04 - Paso 5] / [DSC004 - Paso 5] +4. insert(datos, rol='CLIENTE')
     user = User(
         email=reg_data.email,
         password_hash=get_password_hash(reg_data.password),
@@ -302,44 +304,46 @@ def register(reg_data: UserRegister, request: Request, db: Session = Depends(get
         db.add(role)
         db.flush()
     user.roles.append(role)
-    # [CU04 - Paso 6] / [DSC004 - Paso 6] +Usuario Creado
+    # [CU04 - Paso 6] / [DSC004 - Paso 6] +5. Usuario Creado
     db.commit()
     db.refresh(user)
 
     log_event(db, user.id, "REGISTER", "users", user.id, {"email": user.email, "role": "CLIENTE"}, request.client.host)
-    # [CU04 - Paso 7] / [DSC004 - Paso 7] +Notificar éxito
+    # [CU04 - Paso 7] / [DSC004 - Paso 7] +6. Notificar éxito
     return user
 
+# [CU02 - Paso 1] (IU) El usuario solicita el cierre de sesión en IU_Navbar
 @router.post("/auth/logout")
+# [CU02 - Paso 2] / [DSC002 - Paso 2] +1. logout(token)
 def logout(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """[CU02] Cerrar sesión activa"""
-    # [CU02 - Paso 2] / [DSC002 - Paso 2] +logout(token)
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
         session = db.query(SessionToken).filter(SessionToken.token == token).first()
         if session:
-            # [CU02 - Paso 3] / [DSC002 - Paso 3] +update_revoked(token)
+            # [CU02 - Paso 3] / [DSC002 - Paso 3] +2. update_revoked(token)
             session.is_revoked = True
-            # [CU02 - Paso 4] / [DSC002 - Paso 4] +Confirmación
+            # [CU02 - Paso 4] / [DSC002 - Paso 4] +3. Confirmación
             db.commit()
             log_event(db, current_user.id, "LOGOUT", "session_tokens", session.id, {"token_id": session.id}, request.client.host)
-    # [CU02 - Paso 5] / [DSC002 - Paso 5] +Limpiar credenciales y redirigir (en frontend)
+    # [CU02 - Paso 5] / [DSC002 - Paso 5] +4. Limpiar credenciales y redirigir (en frontend)
     return {"message": "Sesión cerrada correctamente."}
 
+# [CU03 - Paso 1] (IU) El usuario solicita recuperación de credenciales ingresando su email
 @router.post("/auth/recover")
+# [CU03 - Paso 2] / [DSC003 - Paso 2] +1. recover(email)
 def recover_credentials(data: UserRecover, request: Request, db: Session = Depends(get_db)):
     """[CU03] Recuperar credenciales de acceso"""
-    # [CU03 - Paso 2] / [DSC003 - Paso 2] +recover(email)
-    # [CU03 - Paso 3] / [DSC003 - Paso 3] +verificar_email(email)
+    # [CU03 - Paso 3] / [DSC003 - Paso 3] +2. verificar_email(email)
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
         # Respuesta neutra por seguridad; aviso solo en consola para diagnóstico.
         print(f"[RECOVER] Solicitud para un correo NO registrado: {data.email} (no se envía correo)")
         return {"message": "Si el correo está registrado, se enviará un enlace de recuperación."}
-    # [CU03 - Paso 4] / [DSC003 - Paso 4] +Existe (si pasa validación)
+    # [CU03 - Paso 4] / [DSC003 - Paso 4] +3. Existe (si pasa validación)
 
-    # [CU03 - Paso 5] / [DSC003 - Paso 5] +generar_y_enviar_token()
+    # [CU03 - Paso 5] / [DSC003 - Paso 5] +4. generar_y_enviar_token()
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     # Vencimiento oficial del sistema según CU03: estrictamente 5 minutos
@@ -360,7 +364,7 @@ def recover_credentials(data: UserRecover, request: Request, db: Session = Depen
     print(f"[RECOVER] Enlace de recuperación para {user.email}: {reset_link} (Enviado por SMTP: {sent})")
 
     log_event(db, user.id, "RECOVER", "users", user.id, {"email": user.email, "sent": sent}, request.client.host)
-    # [CU03 - Paso 6] / [DSC003 - Paso 6] +Mensaje de éxito
+    # [CU03 - Paso 6] / [DSC003 - Paso 6] +5. Mensaje de éxito
     response = {
         "message": "Si el correo está registrado, se enviará un enlace de recuperación.",
         "email_sent": sent,
@@ -370,10 +374,11 @@ def recover_credentials(data: UserRecover, request: Request, db: Session = Depen
         response["dev_reset_link"] = reset_link
     return response
 
+# [CU03 - Paso 7] (IU) El usuario abre el enlace de restablecimiento en IU_ResetPassword
 @router.post("/auth/reset-password")
+# [CU03 - Paso 8] / [DSC003 - Paso 8] +1. reset_password(token, nueva_clave)
 def reset_password(data: PasswordReset, request: Request, db: Session = Depends(get_db)):
     """[CU03] Restablecer contraseña con token de seguridad (5 minutos)"""
-    # [CU03 - Paso 8] / [DSC003 - Paso 8] +reset_password(token, nueva_clave)
     user = db.query(User).filter(User.reset_token == data.token).first()
     
     if not user:
@@ -382,15 +387,15 @@ def reset_password(data: PasswordReset, request: Request, db: Session = Depends(
     if not user.reset_token_expires or datetime.now(timezone.utc) > user.reset_token_expires:
         raise HTTPException(status_code=400, detail="El enlace es inválido o expiró (5 minutos).")
 
-    # [CU03 - Paso 9] / [DSC003 - Paso 9] +update_password(hash)
+    # [CU03 - Paso 9] / [DSC003 - Paso 9] +2. update_password(hash)
     user.password_hash = get_password_hash(data.new_password)
     user.reset_token = None
     user.reset_token_expires = None
-    # [CU03 - Paso 10] / [DSC003 - Paso 10] +Actualizado
+    # [CU03 - Paso 10] / [DSC003 - Paso 10] +3. Actualizado
     db.commit()
 
     log_event(db, user.id, "RESET_PASSWORD", "users", user.id, {"email": user.email}, request.client.host)
-    # [CU03 - Paso 11] / [DSC003 - Paso 11] +Redirigir a Login (en frontend)
+    # [CU03 - Paso 11] / [DSC003 - Paso 11] +4. Redirigir a Login (en frontend)
     return {"message": "Contraseña restablecida con éxito."}
 
 @router.get("/auth/me", response_model=UserDetailResponse)
@@ -424,7 +429,9 @@ def list_users(db: Session = Depends(get_db), current_user: User = Depends(admin
     """[CU05] Lista todos los usuarios con su sucursal asignada"""
     return [_user_detail(db, u) for u in db.query(User).all()]
 
+# [CU05 - Paso 1] (IU) El Administrador completa formulario de usuario interno en IU_Usuarios
 @router.post("/users", response_model=UserDetailResponse, status_code=201)
+# [CU05 - Paso 2] / [DSC005 - Paso 2] +1. create_user(datos, roles)
 def create_user(
     user_data: UserCreate, 
     request: Request, 
@@ -432,12 +439,12 @@ def create_user(
     current_user: User = Depends(admin_check)
 ):
     """[CU05] Crea un nuevo usuario administrativo o cliente"""
-    # [CU05 - Paso 2] / [DSC005 - Paso 2] +create_user(datos, roles)
+    # [CU05 - Paso 2.1] +2. check_exists(email)
     existing = db.query(User).filter(User.email == user_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="El correo electrónico ya existe.")
     
-    # [CU05 - Paso 3] / [DSC005 - Paso 3] +insert(datos)
+    # [CU05 - Paso 3] / [DSC005 - Paso 3] +3. insert(datos)
     new_user = User(
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
@@ -448,9 +455,9 @@ def create_user(
     )
     db.add(new_user)
     db.flush()
-    # [CU05 - Paso 4] / [DSC005 - Paso 4] +ID Usuario (implícito)
+    # [CU05 - Paso 4] / [DSC005 - Paso 4] +4. ID Usuario (implícito)
 
-    # [CU05 - Paso 5] / [DSC005 - Paso 5] +assign_roles(id, roles)
+    # [CU05 - Paso 5] / [DSC005 - Paso 5] +5. assign_roles(id, roles)
     for role_name in user_data.role_names:
         role = db.query(Role).filter(Role.name == role_name.upper()).first()
         if not role:
@@ -458,7 +465,7 @@ def create_user(
             db.add(role)
             db.flush()
         new_user.roles.append(role)
-    # [CU05 - Paso 6] / [DSC005 - Paso 6] +Roles asignados
+    # [CU05 - Paso 6] / [DSC005 - Paso 6] +6. Roles asignados
 
     # Personal de tienda: la sucursal se asigna en la misma transacción que el usuario.
     is_branch_staff = any(r.name in BRANCH_STAFF_ROLES for r in new_user.roles)
@@ -538,9 +545,10 @@ def deactivate_user(
     return _user_detail(db, user)
 
 # --- ENDPOINTS: AUDITORÍA ---
+# [CU36 - Paso 1] (IU) El Auditor o Superadministrador abre el módulo de auditoría del sistema
 @router.get("/audit/logs", response_model=List[AuditLogResponse])
+# [CU36 - Paso 2] / [DSC036 - Paso 2] +1. get_audit_logs()
 def get_audit_logs(db: Session = Depends(get_db), current_user: User = Depends(admin_check)):
     """[CU36] Consulta la bitácora auditora"""
-    # [CU36 - Paso 2] / [DSC036 - Paso 2] +get_audit_logs()
-    # [CU36 - Paso 3] / [DSC036 - Paso 3] +select_all()
+    # [CU36 - Paso 3] / [DSC036 - Paso 3] +2. select_all() y retorno de bitácora
     return db.query(AuditLog).order_by(AuditLog.timestamp.desc()).all()

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -105,11 +106,12 @@ class PayPalCheckout {
   }
 
   /// Ejecuta el cobro completo por PayPal. Devuelve null si el cliente cancela.
-  /// Lanza [PayPalException] si PayPal o el backend rechazan el pago.
+  /// Lanza [PayPalException] si PayPal o el backend rechazan el pago o si expira el tiempo.
   static Future<PayPalPaymentResult?> pay(
     BuildContext context, {
     required double amountBob,
     required String description,
+    int remainingSeconds = 300,
   }) async {
     final navigator = Navigator.of(context);
 
@@ -147,9 +149,15 @@ class PayPalCheckout {
           amountUsd: amountUsd,
           amountBob: amountBob,
           description: description,
+          initialRemainingSeconds: remainingSeconds,
         ),
       ));
       if (cap == null) return null;
+      if (cap['timeout'] == true) {
+        throw PayPalException(
+          cap['error']?.toString() ?? 'La sesión de pago de 5 minutos ha expirado. Stock liberado.',
+        );
+      }
       return _resultFromCapture(cap, orderId);
     }
 
@@ -159,7 +167,7 @@ class PayPalCheckout {
     }
     final approved = await navigator.push<bool>(MaterialPageRoute(
       builder: (_) => supportsEmbeddedWindow
-          ? PayPalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd)
+          ? PayPalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd, initialRemainingSeconds: remainingSeconds)
           : _ExternalApprovalPage(approveUrl: approveUrl, amountUsd: amountUsd),
     ));
     if (approved != true) return null;
@@ -193,7 +201,14 @@ class PayPalCheckout {
 class PayPalApprovalPage extends StatefulWidget {
   final String approveUrl;
   final double amountUsd;
-  const PayPalApprovalPage({super.key, required this.approveUrl, required this.amountUsd});
+  final int initialRemainingSeconds;
+
+  const PayPalApprovalPage({
+    super.key,
+    required this.approveUrl,
+    required this.amountUsd,
+    this.initialRemainingSeconds = 300,
+  });
 
   @override
   State<PayPalApprovalPage> createState() => _PayPalApprovalPageState();
@@ -204,6 +219,8 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
   int _progress = 0;
   bool _finished = false;
   bool _loadError = false;
+  Timer? _countdownTimer;
+  late int _remainingSeconds;
 
   /// El backend configura return_url = .../checkout/success y cancel_url = .../checkout/cancel.
   bool _handleUrl(String url) {
@@ -227,6 +244,8 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
   @override
   void initState() {
     super.initState();
+    _remainingSeconds = widget.initialRemainingSeconds;
+    _startCountdown();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
@@ -243,6 +262,102 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
         },
       ))
       ..loadRequest(Uri.parse(widget.approveUrl));
+  }
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _remainingSeconds = 0);
+        _handleTimeout();
+      } else {
+        setState(() => _remainingSeconds--);
+      }
+    });
+  }
+
+  void _handleTimeout() {
+    if (_finished) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.timer_off_outlined, color: Colors.red),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sesión Expirada (5 min)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'El tiempo de 5 minutos para completar el pago ha expirado. '
+          'La reserva de prendas ha sido liberada automáticamente.',
+          style: TextStyle(fontSize: 14),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _finish(false);
+            },
+            style: FilledButton.styleFrom(backgroundColor: _paypalBlue),
+            child: const Text('Volver al Carrito'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  Widget _timerBar() {
+    final isUrgent = _remainingSeconds <= 60;
+    final minutes = (_remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_remainingSeconds % 60).toString().padLeft(2, '0');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: isUrgent ? const Color(0xFFFFF0F0) : const Color(0xFFEFF6FF),
+        border: Border(
+          bottom: BorderSide(
+            color: isUrgent ? const Color(0xFFFFB4B4) : const Color(0xFFC7DCFA),
+          ),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isUrgent ? Icons.warning_amber_rounded : Icons.timer_outlined,
+            size: 15,
+            color: isUrgent ? const Color(0xFFD20000) : _paypalBlue,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            isUrgent
+                ? '¡Tiempo a punto de expirar!: $minutes:$seconds'
+                : 'Tiempo restante de reserva: $minutes:$seconds',
+            style: TextStyle(
+              color: isUrgent ? const Color(0xFFD20000) : _paypalBlue,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -268,33 +383,40 @@ class _PayPalApprovalPageState extends State<PayPalApprovalPage> {
                 )
               : null,
         ),
-        body: _loadError
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.wifi_off, size: 48, color: _muted),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'No se pudo cargar PayPal. Revisa tu conexión a internet.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: _ink),
+        body: Column(
+          children: [
+            _timerBar(),
+            Expanded(
+              child: _loadError
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.wifi_off, size: 48, color: _muted),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'No se pudo cargar PayPal. Revisa tu conexión a internet.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: _ink),
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: () {
+                                setState(() => _loadError = false);
+                                _controller.loadRequest(Uri.parse(widget.approveUrl));
+                              },
+                              child: const Text('Reintentar'),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: () {
-                          setState(() => _loadError = false);
-                          _controller.loadRequest(Uri.parse(widget.approveUrl));
-                        },
-                        child: const Text('Reintentar'),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            : WebViewWidget(controller: _controller),
+                    )
+                  : WebViewWidget(controller: _controller),
+            ),
+          ],
+        ),
       ),
     );
   }

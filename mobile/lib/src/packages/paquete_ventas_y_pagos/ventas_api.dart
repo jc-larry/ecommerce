@@ -209,4 +209,21 @@ class VentasApi {
     } catch (_) {}
     return [];
   }
+
+  /// [CU18 - Flujo Alterno A] Verificación de timeout de pasarela (5 minutos / 300 segundos).
+  /// Si la sesión expiró, el backend cancela la orden y libera inmediatamente el stock a DISPONIBLE.
+  static Future<Map<String, dynamic>?> checkPaymentTimeout(int orderId) async {
+    try {
+      final r = await http
+          .post(
+            Uri.parse('${AuthService.apiBaseUrl}/sales/orders/$orderId/check-payment-timeout'),
+            headers: await _headers(),
+          )
+          .timeout(_timeout);
+      if (r.statusCode == 200) {
+        return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return null;
+  }
 }
