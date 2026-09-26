@@ -497,10 +497,10 @@ sequenceDiagram
 - **Paquete de Arquitectura:** `paquete_inventario_y_proveedores`
 - **Actores involucrados:** Encargado de Sucursal, Superadministrador
 - **Actor Iniciador:** Encargado de Sucursal Autenticado
-- **Propósito:** Registrar compras formales de lotes de prendas a proveedores autorizados, dando ingreso a las existencias físicas en el almacén de la sucursal y recalculando automáticamente el Costo Promedio Ponderado (CPP).
-- **Precondición:** Prendas y variantes debidamente catalogadas en el sistema y proveedor activo registrado.
-- **Postcondición:** Incremento del stock físico en el inventario de la sucursal, registro contable del movimiento en el Kardex (Libro Mayor de inventario) y actualización del costo promedio ponderado.
-- **Excepciones / Flujos Alternos:** E1: Proveedor no existe o está inactivo. E2: Cantidad o costo unitario menor o igual a cero.
+- **Propósito:** Registrar compras formales de lotes de prendas a proveedores autorizados, dando ingreso a las existencias físicas en el almacén de la sucursal y recalculando automáticamente el Costo Promedio Ponderado (CPP) según normativa contable.
+- **Precondición:** Prendas y variantes debidamente catalogadas en el sistema y proveedor activo registrado en el padrón de proveedores.
+- **Postcondición:** Incremento del stock físico en el inventario de la sucursal, registro contable inmutable del movimiento en el Kardex (Libro Mayor de inventario) con saldo valorizado y actualización del costo promedio ponderado.
+- **Excepciones / Flujos Alternos:** E1: Proveedor no existe o está inactivo (`ProveedorInactivoException`). E2: Cantidad o costo unitario menor o igual a cero (`ValoresMonetariosInvalidosException`).
 
 #### Trazabilidad en Código Fuente:
 - **Backend Router:** [`backend/app/packages/paquete_inventario_y_proveedores/merchandise/routers.py`](file:///backend/app/packages/paquete_inventario_y_proveedores/merchandise/routers.py)
@@ -510,42 +510,69 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    actor E as Encargado de Sucursal
-    participant IU as Interfaz_Ingreso_Mercaderia
-    participant CTR as Controlador_Inventario
-    participant CE_C as Entidad_Compra_Proveedor
-    participant CE_I as Entidad_Inventario_Sucursal
-    participant CE_K as Entidad_Kardex_Movimientos
+    autonumber
+    actor E as «actor»<br/>:EncargadoSucursal
+    participant IU as «boundary»<br/>IU_Ingreso : MerchandiseIntakeComponent
+    participant CTR as «control»<br/>CTR_Compras : MerchandiseRouter
+    participant CE_PRV as «entity»<br/>CE_Proveedor : SupplierModel
+    participant CE_CMP as «entity»<br/>CE_Compra : PurchaseOrderModel
+    participant CE_INV as «entity»<br/>CE_Inventario : InventoryModel
+    participant CE_KDX as «entity»<br/>CE_Kardex : InventoryLedgerModel
 
-    E->>+IU: 1: ingresarLoteMercaderia(proveedor_id, sucursal_id, nro_factura, lista_prendas)
-    IU->>+CTR: 2: registrarIngresoMercaderia(datos_compra)
-    CTR->>CTR: 3: validarProveedorYSucursal(proveedor_id, sucursal_id)
-    CTR->>+CE_C: 4: crearCabeceraCompra(proveedor_id, sucursal_id, nro_factura, total_compra)
-    CE_C-->>-CTR: 5: compra_id = 140
-    loop Por cada prenda recibida en el lote
-        CTR->>+CE_C: 6: registrarDetalleCompra(compra_id, variante_id, cantidad, costo_unitario)
-        CE_C-->>-CTR: 7: detalle_guardado
-        CTR->>+CE_I: 8: incrementarStockFisico(sucursal_id, variante_id, cantidad)
-        CTR->>CE_I: 9: actualizarCostoPromedioPonderado(variante_id, costo_unitario)
-        Note over CTR,CE_I: CPP = (Stock_previo * CPP_previo + Cant_nueva * Costo_nuevo) / Stock_total
-        CE_I-->>-CTR: 10: stock_y_costo_actualizados
-        CTR->>+CE_K: 11: asentarMovimientoKardex(sucursal_id, variante_id, cantidad, tipo="INGRESO_COMPRA", ref="CMP-140")
-        CE_K-->>-CTR: 12: asiento_kardex_registrado
+    E->>+IU: registrarLoteIngreso(proveedor_id: UUID, sucursal_id: UUID, nro_factura_prov: str, items: List[ItemCompraDTO])
+    
+    IU->>+CTR: POST /api/v1/inventory/merchandise-intakes (payload: IntakeRequestDTO)
+    
+    %% Validación de Proveedor
+    CTR->>+CE_PRV: find_by_id(proveedor_id)
+    alt [proveedor == null o proveedor.is_active == false]
+        CE_PRV-->>CTR: ProveedorInactivoException()
+        CTR-->>IU: 422 Unprocessable Entity: {error: "Proveedor no habilitado para emitir compras"}
+        IU-->>E: mostrarAlerta("Proveedor inactivo o inexistente")
+    else [proveedor activo]
+        CE_PRV-->>-CTR: Supplier(id=12, razon_social="Textiles Andinos S.A.")
     end
-    CTR-->>-IU: 13: respuestaExitosa(compra_id=140, mensaje="Ingreso de mercadería completado")
-    IU-->>-E: 14: mostrarConfirmacion("Stock actualizado y costo promedio recalculado")
+
+    %% Cabecera de Compra
+    CTR->>+CE_CMP: create_purchase_order(proveedor_id=12, sucursal_id, nro_factura_prov, estado='RECIBIDO')
+    CE_CMP-->>-CTR: compra: PurchaseOrder(id=140)
+
+    %% Procesamiento de Cada Prenda
+    loop [Por cada variante ingresada en el lote]
+        CTR->>+CE_CMP: add_item(compra_id=140, variante_id, cantidad, costo_unitario)
+        CE_CMP-->>-CTR: ItemCompra(id=811)
+        
+        %% Lectura de Inventario Actual para CPP
+        CTR->>+CE_INV: get_stock_and_cpp(sucursal_id, variante_id)
+        CE_INV-->>-CTR: StockActual(stock_previo=20, cpp_previo=100.00)
+        
+        %% Recálculo Matemático de CPP
+        CTR->>CTR: calcularNuevoCPP(stock_previo=20, cpp_prev=100, cant_nueva=10, costo_nuevo=130) -> nuevo_cpp = 110.00
+        
+        %% Actualización de Inventario Físico y Valuación
+        CTR->>+CE_INV: update_inventory(sucursal_id, variante_id, stock_adicional=10, nuevo_cpp=110.00)
+        CE_INV-->>-CTR: Inventory(stock_total=30, cpp=110.00)
+        
+        %% Asiento Contable en Kardex
+        CTR->>+CE_KDX: registrarMovimiento(tipo='INGRESO_COMPRA', ref="CMP-140", cantidad=+10, costo_unit=130.00, saldo_resultante=30)
+        CE_KDX-->>-CTR: AsientoKardex(id=9452)
+    end
+
+    CTR-->>-IU: 201 Created: PurchaseSummaryDTO(compra_id=140, items_procesados=len(items), nuevo_valor_inventario)
+    IU-->>-E: renderizarComprobanteIngresoConKardexActualizado()
 ```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
 - **`CU10[Paso 1: El Encargado de Sucursal ingresa a la interfaz de recepción de mercadería y completa los datos del proveedor, número de factura y lista de prendas con cantidades y costos unitarios de adquisición.]`**
-- **`CU10[Paso 1.1: La interfaz despacha la solicitud de registro al controlador (POST /api/v1/inventory/merchandise-intakes).]`**
-- **`CU10[Paso 1.2: El controlador valida la existencia y estado activo del proveedor y de la sucursal de destino.]`**
-- **`CU10[Paso 1.3: Se genera la cabecera del registro de compra en CE_Compra_Proveedor.]`**
-- **`CU10[Paso 1.4: [loop: Por cada prenda] Se insertan las líneas de detalle con cantidad y costo de adquisición.]`**
-- **`CU10[Paso 1.5: Se incrementa el stock físico de cada variante en el inventario de la sucursal (CE_Inventario_Sucursal).]`**
-- **`CU10[Paso 1.6: Se recalcula automáticamente el Costo Promedio Ponderado (CPP) según la fórmula contable oficial.]`**
-- **`CU10[Paso 1.7: Se asienta el movimiento contable tipo 'INGRESO_COMPRA' en el Kardex (CE_Kardex_Movimientos).]`**
-- **`CU10[Paso 1.8: La interfaz notifica el éxito de la operación y despliega las existencias actualizadas.]`**
+- **`CU10[Paso 2: La interfaz despacha la solicitud HTTP POST /api/v1/inventory/merchandise-intakes con el DTO validado al controlador CTR_Compras.]`**
+- **`CU10[Paso 3: El controlador consulta en CE_Proveedor el estado y habilitación del proveedor; si está inactivo se aborta con error 422 Unprocessable Entity.]`**
+- **`CU10[Paso 4: Confirmado el proveedor, se persiste la cabecera de la orden de compra en CE_Compra con estado 'RECIBIDO'.]`**
+- **`CU10[Paso 5: [loop: Por cada variante] Se insertan las líneas de detalle de compra con cantidad y costo de adquisición.]`**
+- **`CU10[Paso 6: Se consulta el stock actual y costo promedio vigente en CE_Inventario para la variante y sucursal.]`**
+- **`CU10[Paso 7: El controlador ejecuta el recálculo financiero de Costo Promedio Ponderado (CPP) aplicando la fórmula contable oficial.]`**
+- **`CU10[Paso 8: Se actualizan las existencias físicas incrementadas y el nuevo CPP unitario en CE_Inventario.]`**
+- **`CU10[Paso 9: Se genera el asiento contable oficial en CE_Kardex con tipo 'INGRESO_COMPRA', costo unitario y saldo resultante valorizado.]`**
+- **`CU10[Paso 10: La interfaz recibe la confirmación con el código de compra y despliega el comprobante con existencias y CPP actualizado.]`**
 
 ---
 
@@ -967,105 +994,120 @@ sequenceDiagram
 ### CU18: Procesar venta omnicanal (E-commerce / App Móvil)
 
 - **Ciclo de Desarrollo:** Ciclo 2
-- **Paquete de Arquitectura:** paquete_ventas_y_pagos
+- **Paquete de Arquitectura:** `paquete_ventas_y_pagos`
 - **Actores involucrados:** Cliente Registrado, Pasarela de Pagos (PayPal / Stripe / Red Enlace / QR)
 - **Actor Iniciador:** Cliente autenticado
 - **Propósito:** Concretar la compra omnicanal permitiendo al comprador seleccionar obligatoriamente la modalidad de entrega (Retiro en Sucursal con plazo perentorio de custodia de 48 horas vs. Envío a Domicilio por Delivery) y el medio de pago mediante pasarela (PayPal, Tarjeta de Débito/Crédito, QR interoperable o Efectivo). Incorpora control estricto de timeout de pasarela de 5 minutos (300 segundos): si la pasarela no confirma en 5 minutos, la sesión de pago expira, la reserva se anula de inmediato regresando la prenda a disponible, y se despacha notificación push urgente al comprador informándole que no se realizó ningún cargo. Para retiro en sucursal, si transcurren las 48 horas sin ser recogida, la prenda retorna automáticamente al inventario de venta y se emite una Nota de Crédito al cliente para evitar pedidos acumulados.
 - **Precondición:** Carrito de compras con al menos una prenda y existencias confirmadas en la sucursal designada.
 - **Postcondición:** Orden creada con estado 'PAGADA' (o cancelada si expiró el timeout de 5 minutos), descuento de existencias en inventario, comprobante de pago emitido por la pasarela, factura tributaria generada con código de control/QR, carrito vaciado y guía de envío o entrega en tienda asignada con fecha límite de retiro (48h).
-- **Excepciones / Flujos Alternos:** E1: Timeout de 5 minutos alcanzado en pasarela (anulación automática de reserva y aviso push sin cobro). E2: Pago rechazado o fondos insuficientes en la pasarela. E3: Quiebre de stock concurrente durante el proceso de pago. E4: Vencimiento del plazo de custodia de 48 horas para retiro en sucursal (reingreso a stock y generación de Nota de Crédito).
+- **Excepciones / Flujos Alternos:** E1: Timeout de 5 minutos alcanzado en pasarela (anulación automática de reserva y aviso push sin cobro). E2: Pago rechazado o fondos insuficientes en la pasarela. E3: Quiebre de stock concurrente durante el proceso de pago (`StockInsuficienteException`). E4: Vencimiento del plazo de custodia de 48 horas para retiro en sucursal (reingreso a stock y generación de Nota de Crédito).
 
 #### Trazabilidad en Código Fuente:
-- **Backend Router:** [ackend/app/packages/paquete_ventas_y_pagos/routers.py](file:///backend/app/packages/paquete_ventas_y_pagos/routers.py)
-- **Backend Servicio:** [ackend/app/packages/paquete_ventas_y_pagos/paypal_service.py](file:///backend/app/packages/paquete_ventas_y_pagos/paypal_service.py)
-- **Frontend Web Component:** [rontend-web/src/app/packages/paquete_ventas_y_pagos/cart/cart-modal.component.ts](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/cart/cart-modal.component.ts)
-- **Mobile Flutter View:** [mobile/lib/src/packages/paquete_ventas_y_pagos/cart_view.dart](file:///mobile/lib/src/packages/paquete_ventas_y_pagos/cart_view.dart)
+- **Backend Router:** [`backend/app/packages/paquete_ventas_y_pagos/routers.py`](file:///backend/app/packages/paquete_ventas_y_pagos/routers.py)
+- **Backend Servicio:** [`backend/app/packages/paquete_ventas_y_pagos/paypal_service.py`](file:///backend/app/packages/paquete_ventas_y_pagos/paypal_service.py)
+- **Frontend Web Component:** [`frontend-web/src/app/packages/paquete_ventas_y_pagos/cart/cart-modal.component.ts`](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/cart/cart-modal.component.ts)
+- **Mobile Flutter View:** [`mobile/lib/src/packages/paquete_ventas_y_pagos/cart_view.dart`](file:///mobile/lib/src/packages/paquete_ventas_y_pagos/cart_view.dart)
 
 #### Diagrama de Secuencia (Mermaid):
-`mermaid
+```mermaid
 sequenceDiagram
-    actor C as Cliente
-    participant IU as Interfaz_Checkout (Web / Móvil)
-    participant CTR as Controlador_Ventas
-    participant PAS as Pasarela_De_Pagos (PayPal / QR / Tarjeta)
-    participant CE_I as Entidad_Inventario
-    participant CE_O as Entidad_Orden_Venta
-    participant CE_P as Entidad_Registro_Pago
-    participant CTR_F as Controlador_Facturacion
-    participant CE_F as Entidad_Factura_Fiscal
-    participant CE_NC as Entidad_Nota_Credito
-    participant NOTIF as Servicio_Notificaciones_Push
+    autonumber
+    actor C as «actor»<br/>:Cliente
+    participant IU as «boundary»<br/>IU_Checkout : CartModalComponent
+    participant CTR as «control»<br/>CTR_Ventas : SalesService
+    participant PAS as «external»<br/>PAS_PayPal : PayPalGateway
+    participant CE_I as «entity»<br/>CE_Inventario : InventoryModel
+    participant CE_O as «entity»<br/>CE_Orden : SaleOrderModel
+    participant CTR_F as «control»<br/>CTR_Fact : InvoiceService
+    participant CE_F as «entity»<br/>CE_Factura : InvoiceModel
+    participant CE_NC as «entity»<br/>CE_NotaCredito : CreditNoteModel
+    participant NOTIF as «control»<br/>CTR_Notif : PushNotificationService
 
-    C->>+IU: 1: confirmarCompra(modalidad_entrega, sucursal_id, direccion, medio_pago, nit_ci)
+    C->>+IU: confirmarCheckout(modalidad: EnumModalidad, sucursal_id: UUID, nit_ci: str, medio_pago: EnumPago)
     
-    alt Modalidad: RETIRO EN TIENDA FÍSICA (Sucursal)
-        IU->>IU: 1.1a: fijarCostoEnvio(Bs 0.00) y fijarPlazoCustodia(48 horas)
-    else Modalidad: ENVÍO POR DELIVERY A DOMICILIO
-        IU->>IU: 1.1b: calcularTarifaEnvioPorZona(direccion) -> costo_envio = Bs 15.00
+    alt [modalidad == RETIRO_SUCURSAL]
+        IU->>IU: setParametrosEntrega(costo_envio: 0.00, custodia_limite_horas: 48)
+    else [modalidad == DELIVERY_DOMICILIO]
+        IU->>IU: calcularTarifaEnvio(coordenadas_gps: LatLng): Decimal(15.00)
     end
 
-    IU->>+CTR: 2: iniciarCheckoutConReserva(datos_checkout)
-    CTR->>+CE_I: 3: bloquearStockTemporal(sucursal_id, variantes, cantidades)
-    CE_I-->>-CTR: 4: stock_bloqueado_ok
-    CTR->>+CE_O: 5: registrarOrdenPendiente(estado='PENDIENTE_PAGO', session_timeout=300s)
-    CE_O-->>-CTR: 6: orden_id = 450, expires_at = now + 5min
-    CTR-->>-IU: 7: sesionIniciada(orden_id=450, tiempo_restante=300s)
+    IU->>+CTR: POST /api/v1/sales/checkout-session (payload: CheckoutSessionDTO)
+    
+    %% Validación y Bloqueo de Stock
+    CTR->>+CE_I: select_for_update_stock(sucursal_id, variantes_ids, cantidades)
+    alt [stock_disponible < cantidad_solicitada]
+        CE_I-->>CTR: StockInsuficienteException(variante_id)
+        CTR-->>IU: 409 Conflict: {error: "Stock agotado en sucursal"}
+        IU-->>C: renderizarAlertaStockAgotado()
+    else [stock_disponible >= cantidad_solicitada]
+        CE_I-->>-CTR: stock_bloqueado_ok: bool
+        CTR->>+CE_O: create(estado='PENDIENTE_PAGO', timeout_segundos=300, modalidad=modalidad)
+        CE_O-->>-CTR: orden_instancia: SaleOrder(id=450, expires_at=now+5min)
+        CTR-->>-IU: 201 Created: SesionCheckoutDTO(orden_id=450, token_expiracion=300s)
+    end
 
-    alt [Flujo Expiración de Pasarela: Timeout > 5 Minutos (300 segundos)]
-        IU->>+CTR: 8a: notificarExpiracionOVerificarTimeout(orden_id=450)
-        CTR->>+CE_I: 9a: liberarStockBloqueado(sucursal_id, variantes, cantidades)
-        CE_I-->>-CTR: 10a: stock_liberado_a_disponible
-        CTR->>+CE_O: 11a: anularOrden(estado='CANCELADA_TIMEOUT')
-        CE_O-->>-CTR: 12a: orden_anulada
-        CTR->>+NOTIF: 13a: despacharAlertaPush('Sesión de pago expiró. No se realizó ningún cargo. Prendas liberadas.')
-        NOTIF-->>-CTR: 14a: alerta_enviada
-        CTR-->>-IU: 15a: ordenCanceladaPorTiempo()
-        IU-->>C: 16a: mostrarPantallaExpiracionConBotonReintentar()
-    else [Flujo Concurrente Normal: Pago Confirmado dentro de los 5 Minutos]
-        IU->>+PAS: 8b: procesarCobroPasarela(monto_total, token_autorizacion)
-        PAS-->>-IU: 9b: cobro_confirmado(ref_pasarela)
-        IU->>+CTR: 10b: confirmarPagoOrden(orden_id=450, ref_pasarela)
-        CTR->>+CE_I: 11b: descontarDefinitivamenteStock(sucursal_id, variantes)
-        CE_I-->>-CTR: 12b: stock_descontado
-        CTR->>+CE_P: 13b: registrarComprobantePago(orden_id=450, ref_pasarela, estado='CONFIRMADO')
-        CE_P-->>-CTR: 14b: pago_registrado
-        CTR->>+CTR_F: 15b: emitirFacturaFiscal(orden_id=450, nit_ci, total, iva_13)
-        CTR_F->>+CE_F: 16b: persistirFactura(codigo_control, qr)
-        CE_F-->>-CTR_F: 17b: factura_id = 310
-        CTR_F-->>-CTR: 18b: factura_generada
+    %% Bifurcación de Tiempo: Timeout Pasarela vs Pago Exitoso
+    alt [Flujo Excepcional: Timeout de Pasarela > 300 segundos]
+        IU->>+CTR: POST /api/v1/sales/timeout-abort (orden_id=450)
+        CTR->>+CE_I: revertirBloqueoTemporal(sucursal_id, items)
+        CE_I-->>-CTR: stock_restaurado: bool
+        CTR->>+CE_O: update_estado(orden_id=450, nuevo_estado='CANCELADA_TIMEOUT')
+        CE_O-->>-CTR: void
+        CTR->>+NOTIF: enviarPush(cliente_id, "Sesión de pago expirada. Prendas liberadas sin cobro.")
+        NOTIF-->>-CTR: ack_push
+        CTR-->>-IU: 200 OK: {estado: "SESION_EXPIRADA"}
+        IU-->>C: mostrarModalReintento(tiempo_agotado=true)
+
+    else [Flujo Normal: Pago Confirmado dentro del límite de 5 minutos]
+        IU->>+PAS: createAndCaptureOrder(monto_total: Decimal, moneda: "BOB", auth_token: str)
+        PAS-->>-IU: PaymentCaptureResponse(id="PAY-88219", status="COMPLETED")
         
-        alt Modalidad: RETIRO EN TIENDA FÍSICA
-            CTR->>CE_O: 19b: fijarPlazoRetiro(pickup_deadline = now + 48h, estado='LISTO_RETIRO')
-            CTR->>NOTIF: 20b: notificarCliente('Tu pedido está listo para recoger en sucursal. Plazo máximo: 48 horas.')
+        IU->>+CTR: POST /api/v1/sales/confirm-payment (orden_id=450, transaccion_id="PAY-88219")
+        CTR->>+CE_I: descontarStockFisicoDefinitivo(sucursal_id, items)
+        CE_I-->>-CTR: stock_descontado: bool
+        CTR->>+CE_O: update(estado='PAGADA', id_transaccion="PAY-88219")
+        CE_O-->>-CTR: orden_actualizada
+        
+        %% Facturación Automática (Ley 843 IVA 13% Bolivia)
+        CTR->>+CTR_F: emitirFacturaComputarizada(orden_id=450, nit_ci, total_bob, tasa_iva=0.13)
+        CTR_F->>+CE_F: insert(num_factura, codigo_control, qr_sin, autorizacion_sin)
+        CE_F-->>-CTR_F: factura_persisitida: Invoice(id=310)
+        CTR_F-->>-CTR: FacturaDTO(id=310, url_pdf="/invoices/310.pdf")
+
+        alt [modalidad == RETIRO_SUCURSAL]
+            CTR->>CE_O: setPlazoCustodia(pickup_deadline = now + 48h, estado='LISTO_RETIRO')
+            CTR->>NOTIF: despacharAlertaPickup(cliente_id, "Prendas listas en sucursal. Plazo máximo: 48 horas")
             
-            opt [Subflujo Expiración Custodia 48 Horas Sin Recojo]
-                CTR->>+CE_I: 21b: reingresarStockASucursal(sucursal_id, variantes)
-                CE_I-->>-CTR: 22b: stock_retornado_a_exhibicion
-                CTR->>+CE_NC: 23b: emitirNotaDeCredito(cliente_id, monto_total, motivo='EXPIRACION_RETIRO_48H')
-                CE_NC-->>-CTR: 24b: nota_credito_code = 'NC-2026-9812'
-                CTR->>NOTIF: 25b: notificarCliente('Plazo de 48h vencido. Prenda reingresada a stock y se generó tu Nota de Crédito NC-2026-9812.')
+            opt [Job Cron: Cliente no recoge en 48 Horas]
+                CTR->>+CE_I: reingresarStockExhibicion(sucursal_id, items)
+                CE_I-->>-CTR: existencias_repuestas
+                CTR->>+CE_NC: emitirNotaCredito(cliente_id, monto_total, motivo='ABANDONO_PEDIDO_48H')
+                CE_NC-->>-CTR: NotaCredito(codigo="NC-2026-9812")
+                CTR->>NOTIF: notificarNotaCreditoGenerada(cliente_id, "Plazo de 48h vencido. Se emitió NC por el monto pagado.")
             end
-        else Modalidad: ENVÍO POR DELIVERY
-            CTR->>CE_O: 19c: generarGuiaDespacho(direccion, tarifa_envio, estado='PREPARANDO_DESPACHO')
+        else [modalidad == DELIVERY_DOMICILIO]
+            CTR->>CE_O: generarHojaRutaDespacho(direccion, tarifa_envio, estado='PREPARANDO_DESPACHO')
         end
-        
-        CTR-->>-IU: 26b: respuestaExitosa(orden_id=450, factura_id=310, modalidad_entrega)
-        IU-->>-C: 27b: mostrarPantallaExito(resumen_compra, boton_descargar_factura)
+
+        CTR-->>-IU: 200 OK: CheckoutCompleteDTO(orden_id=450, factura_id=310)
+        IU-->>-C: renderizarComprobanteConDescargaPDF()
     end
-`
+```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **CU18[Paso 1: El cliente accede al Checkout desde el carrito de compras y define los datos de su pedido: modalidad de entrega obligatoria (Retiro en Tienda Física con 48h de custodia vs. Envío por Delivery), sucursal, datos de facturación NIT/CI y medio de pago.]**
-- **CU18[Paso 1.1: [alt: Modalidad Retiro en Tienda] Si selecciona retiro en sucursal física, el costo de envío es Bs. 0.00 y se fija un plazo improrrogable de 48 horas para recoger las prendas. [alt: Modalidad Delivery] Si solicita delivery, se ingresa la dirección y se calcula la tarifa según zona geográfica.]**
-- **CU18[Paso 2: La interfaz envía la solicitud de compra con reserva temporal (POST /api/v1/sales/checkout) al controlador CTR_Ventas.]**
-- **CU18[Paso 3: El controlador bloquea temporalmente las existencias en CE_Inventario y fija un temporizador estricto de 5 minutos (300 segundos) para la sesión de pago.]**
-- **CU18[Paso 4: [alt: Expiración por Timeout de 5 Minutos] Si el cliente no completa el pago en la pasarela dentro de los 300 segundos, la orden pasa a 'CANCELADA_TIMEOUT', el stock bloqueado se libera de inmediato devolviendo la disponibilidad de la prenda a la tienda, y el sistema despacha una notificación push urgente informando que el tiempo expiró y no se le cobró nada.]**
-- **CU18[Paso 5: [alt: Pago Exitoso en Tiempo Límite] La Pasarela de Pagos (PayPal / QR / Tarjeta) procesa el cobro satisfactoriamente y devuelve la confirmación con el código de transacción antes de los 5 minutos.]**
-- **CU18[Paso 6: Se descuenta definitivamente el stock físico en CE_Inventario, registrando el asiento de salida en el Kardex/LibroMayor.]**
-- **CU18[Paso 7: Se registra la orden en estado 'PAGADA' y se almacena el comprobante en CE_Registro_Pago.]**
-- **CU18[Paso 8: Se invoca al controlador fiscal CTR_Facturacion emitiendo la Factura Oficial computarizada con IVA 13%, código de control y QR tributario en CE_Factura_Fiscal (CU20).]**
-- **CU18[Paso 9: [alt: Si es Retiro en Tienda] Se programa la orden en estado 'LISTO_RETIRO' con fecha límite de 48 horas. Si transcurren las 48 horas sin ser retirada, el stock retorna a exhibición en la sucursal y el sistema emite automáticamente una Nota de Crédito en CE_Nota_Credito para su próxima compra sin acumular bultos en tienda.]**
-- **CU18[Paso 10: [alt: Si es Delivery] Se genera la guía de despacho y rastreo en CE_Envio_Delivery (CU29) asignando repartidor.]**
+- **`CU18[Paso 1: El cliente accede al Checkout desde el carrito de compras y define los datos de su pedido: modalidad de entrega obligatoria (Retiro en Tienda Física con 48h de custodia vs. Envío por Delivery), sucursal, datos de facturación NIT/CI y medio de pago.]`**
+- **`CU18[Paso 1.1: [alt: Modalidad Retiro en Tienda] Si selecciona retiro en sucursal física, el costo de envío es Bs. 0.00 y se fija un plazo improrrogable de 48 horas para recoger las prendas. [alt: Modalidad Delivery] Si solicita delivery, se ingresa la dirección y se calcula la tarifa según coordenadas GPS y zona geográfica.]`**
+- **`CU18[Paso 2: La interfaz envía la solicitud HTTP POST /api/v1/sales/checkout-session con el DTO validado al controlador CTR_Ventas.]`**
+- **`CU18[Paso 3: El controlador bloquea temporalmente las existencias en CE_Inventario mediante SELECT FOR UPDATE y fija un temporizador estricto de 5 minutos (300 segundos) para la sesión de pago.]`**
+- **`CU18[Paso 4: [alt: Expiración por Timeout de 5 Minutos] Si el cliente no completa el pago en la pasarela dentro de los 300 segundos, la orden pasa a 'CANCELADA_TIMEOUT', el stock bloqueado se libera de inmediato devolviendo la disponibilidad de la prenda a la tienda, y el sistema despacha una notificación push urgente informando que el tiempo expiró y no se le cobró nada.]`**
+- **`CU18[Paso 5: [alt: Pago Exitoso en Tiempo Límite] La Pasarela de Pagos (PayPal) procesa el cobro satisfactoriamente y devuelve la confirmación con el identificador de captura antes de los 5 minutos.]`**
+- **`CU18[Paso 6: Se descuenta definitivamente el stock físico en CE_Inventario, registrando el asiento de salida en el Kardex/LibroMayor.]`**
+- **`CU18[Paso 7: Se registra la orden en estado 'PAGADA' y se asocian las referencias de transacción bancaria.]`**
+- **`CU18[Paso 8: Se invoca al controlador fiscal CTR_Facturacion emitiendo la Factura Oficial computarizada con IVA 13%, código de control y QR tributario en CE_Factura_Fiscal.]`**
+- **`CU18[Paso 9: [alt: Si es Retiro en Tienda] Se programa la orden en estado 'LISTO_RETIRO' con fecha límite de 48 horas. Si transcurren las 48 horas sin ser retirada, el stock retorna a exhibición en la sucursal y el sistema emite automáticamente una Nota de Crédito en CE_NotaCredito para su próxima compra sin acumular bultos en tienda.]`**
+- **`CU18[Paso 10: [alt: Si es Delivery] Se genera la hoja de ruta de despacho y rastreo en CE_Envio asignando repartidor.]`**
+
+---
 
 ### CU19: Procesar venta presencial en caja
 
@@ -1073,80 +1115,105 @@ sequenceDiagram
 - **Paquete de Arquitectura:** `paquete_ventas_y_pagos`
 - **Actores involucrados:** Cajero
 - **Actor Iniciador:** Cajero Autenticado frente a Mostrador con Turno Abierto
-- **Propósito:** Registrar ventas directas en el terminal de Punto de Venta (POS) de la tienda física mediante cobro en efectivo con cálculo de vuelto en tiempo real, descuento inmediato de inventario físico, registro en kardex, emisión automática de factura fiscal con IVA 13% y disparo de impresión térmica para ticket de 80mm con apertura de gaveta de dinero.
+- **Propósito:** Registrar ventas directas en el terminal de Punto de Venta (POS) de la tienda física mediante cobro en efectivo con cálculo de vuelto en tiempo real, validación de turno de caja abierto, descuento inmediato de inventario físico, registro en kardex, emisión automática de factura fiscal con IVA 13% y disparo de hardware físico (impresión térmica ESC/POS para ticket de 80mm con apertura de gaveta de dinero).
 - **Precondición:** Cajero con turno de caja activo en estado `ABIERTA` (`session_status = 'ABIERTA'`) asignado a la sucursal actual.
-- **Postcondición:** Orden de venta creada en estado `COMPLETADO`, stock físico descontado con kardex `VENTA`, pago en efectivo registrado con vuelto exacto, factura computarizada oficial emitida e impresión térmica ejecutada.
+- **Postcondición:** Orden de venta creada en estado `COMPLETADO`, stock físico descontado con kardex `VENTA`, pago en efectivo registrado con vuelto exacto, factura computarizada oficial emitida e impresión térmica ejecutada con apertura de gaveta.
 - **Excepciones / Flujos Alternos:**
-  - `E1: Turno no abierto o expirado`: Se aborta con HTTP 400 (`session_status != 'ABIERTA'`).
-  - `E2: Stock insuficiente`: Se aborta con HTTP 400 antes de comprometer la transacción.
+  - `E1: Turno no abierto o expirado`: Se aborta con HTTP 403 (`TurnoInvalidoException`).
+  - `E2: Stock insuficiente`: Se aborta con HTTP 409 antes de comprometer la transacción.
   - `E3: Efectivo recibido menor al total`: Se aborta con HTTP 400 exigiendo cubrir el importe completo.
 
 #### Trazabilidad en Código Fuente y Arquitectura BCE:
 - **Actor:** `Cajero`
-- **Boundary (IU):** `U_PuntoDeVentaPOS` ([`frontend-web/src/app/packages/paquete_ventas_y_pagos/pos/pos.component.ts`](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/pos/pos.component.ts) y [`pos.component.html`](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/pos/pos.component.html))
-- **Controlador:** `CTR_POS` ([`backend/app/packages/paquete_ventas_y_pagos/routers.py`](file:///backend/app/packages/paquete_ventas_y_pagos/routers.py) - `POST /api/v1/pos/orders` / `POST /api/v1/sales/checkout`)
+- **Boundary (IU):** `IU_POS` ([`frontend-web/src/app/packages/paquete_ventas_y_pagos/pos/pos.component.ts`](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/pos/pos.component.ts))
+- **Controlador:** `CTR_POS` ([`backend/app/packages/paquete_ventas_y_pagos/routers.py`](file:///backend/app/packages/paquete_ventas_y_pagos/routers.py) - `POST /api/v1/pos/orders`)
 - **Entidad 1:** `CE_SesionCaja` ([`backend/app/packages/paquete_ventas_y_pagos/models.py`](file:///backend/app/packages/paquete_ventas_y_pagos/models.py) - `CashShift`)
 - **Entidad 2:** `CE_Inventario` ([`backend/app/packages/paquete_inventario_y_proveedores/merchandise/models.py`](file:///backend/app/packages/paquete_inventario_y_proveedores/merchandise/models.py) - `Inventory`, `InventoryLedger`)
 - **Entidad 3:** `CE_Orden` ([`backend/app/packages/paquete_ventas_y_pagos/models.py`](file:///backend/app/packages/paquete_ventas_y_pagos/models.py) - `Order`, `OrderItem`)
-- **Entidad 4:** `CE_MedioDePago` ([`backend/app/packages/paquete_ventas_y_pagos/models.py`](file:///backend/app/packages/paquete_ventas_y_pagos/models.py) - `Payment`, `EfectivoPayment`)
+- **Entidad 4:** `CE_Pago` ([`backend/app/packages/paquete_ventas_y_pagos/models.py`](file:///backend/app/packages/paquete_ventas_y_pagos/models.py) - `Payment`)
 - **Controlador Auxiliar:** `CTR_Facturacion` ([`backend/app/packages/paquete_ventas_y_pagos/routers.py`](file:///backend/app/packages/paquete_ventas_y_pagos/routers.py) - Emisión computarizada IVA 13%)
 - **Entidad 5:** `CE_Factura` ([`backend/app/packages/paquete_ventas_y_pagos/models.py`](file:///backend/app/packages/paquete_ventas_y_pagos/models.py) - `Invoice`)
-- **Dispositivo Externo:** `Dispositivo_Impresora` (Impresora térmica de tickets de 80mm ESC/POS y solenoide de gaveta)
+- **Dispositivo Externo:** `EXT_Impresora` (Controlador ESC/POS para impresora térmica de 80mm y solenoide de gaveta)
 
-#### Diagrama de Secuencia (UML 2.5):
+#### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Cajero as Cajero
-    participant UI as U_PuntoDeVentaPOS
-    participant CTR as CTR_POS
-    participant SC as CE_SesionCaja
-    participant INV as CE_Inventario
-    participant ORD as CE_Orden
-    participant MP as CE_MedioDePago
-    participant FAC_CTR as CTR_Facturacion
-    participant FAC as CE_Factura
-    participant PRN as Dispositivo_Impresora
+    actor Cajero as «actor»<br/>:Cajero
+    participant IU as «boundary»<br/>IU_POS : PosComponent
+    participant CTR as «control»<br/>CTR_POS : PosService
+    participant SC as «entity»<br/>CE_SesionCaja : CashShiftModel
+    participant INV as «entity»<br/>CE_Inventario : InventoryModel
+    participant ORD as «entity»<br/>CE_Orden : OrderModel
+    participant MP as «entity»<br/>CE_Pago : PaymentModel
+    participant FAC_CTR as «control»<br/>CTR_Facturacion : InvoiceService
+    participant FAC as «entity»<br/>CE_Factura : InvoiceModel
+    participant PRN as «external»<br/>EXT_Impresora : EscPosPrinterDriver
 
-    Cajero->>UI: 1: ingresarCobro(session_id=45, items, total=200.00, medio="EFECTIVO", recibido=250.00, NIT="1029384")
-    UI->>CTR: 1.1: POST /api/v1/pos/orders (payload)
-    CTR->>SC: 1.2: get_session(session_id=45)
-    SC-->>CTR: 1.2a: session_status = "ABIERTA"
-
-    rect rgb(245, 235, 245)
-        note over CTR, PRN: Transacción Rápida de Venta Mostrador y Emisión (ACID)
-        CTR->>ORD: 1.3: insert_order(branch_id=1, channel="POS", total=200.00, status="COMPLETADO")
-        ORD-->>CTR: 1.3a: order_id = 880
-        CTR->>INV: 1.4: deduct_stock(branch_id=1, items)
-        INV-->>CTR: 1.4a: stock_deducted_ok
-        note over CTR, MP: Cálculo de cambio en tiempo real: Vuelta = 250.00 - 200.00 = Bs. 50.00
-        CTR->>MP: 1.5: insert_payment(order_id=880, type="EFECTIVO", amount=200.00, cash_received=250.00, cash_change=50.00)
-        MP-->>CTR: 1.5a: pay_ok
-        CTR->>FAC_CTR: 1.6: issue_invoice(order_id=880, nit="1029384", total=200.00)
-        FAC_CTR->>FAC: 1.6.1: insert(order_id=880, doc_type="FACTURA", subtotal=200.00, tax_amount=26.00)
-        FAC-->>FAC_CTR: 1.6.1a: invoice_id = 512
-        FAC_CTR-->>CTR: 1.6.1b: invoice_data
-        CTR->>PRN: 1.7: print_receipt(raw_thermal_data, width=80mm)
-        PRN-->>CTR: 1.7a: print_ok
+    Cajero->>+IU: ingresarVentaDirecta(sesion_id: int, items: List[ItemPOSDTO], efectivo_recibido: Decimal, nit_ci: str, razon_social: str)
+    
+    IU->>+CTR: POST /api/v1/pos/orders (payload: PosCheckoutDTO)
+    
+    %% Validación de Caja
+    CTR->>+SC: get_active_shift(sesion_id)
+    alt [sesion.estado != 'ABIERTA' o sesion.cajero_id != usuario_autenticado]
+        SC-->>CTR: TurnoInvalidoException("Caja cerrada o no autorizada")
+        CTR-->>IU: 403 Forbidden: {error: "Debe realizar apertura de caja"}
+        IU-->>Cajero: bloquearTerminal("Abra turno antes de cobrar")
+    else [sesion.estado == 'ABIERTA']
+        SC-->>-CTR: shift: CashShift(id=45, estado='ABIERTA')
     end
 
-    CTR-->>UI: 1.8: HTTP 200 OK (order_id=880, change=50.00)
-    UI-->>Cajero: 1.9: mostrarCambioYConfirmacion(vuelto=Bs. 50.00, gaveta_abierta)
+    %% Validación de Importe Recibido
+    alt [efectivo_recibido < total_a_pagar]
+        CTR-->>IU: 400 Bad Request: {error: "Monto recibido insuficiente"}
+        IU-->>Cajero: indicarDiferenciaFaltante(faltante: total - recibido)
+    else [efectivo_recibido >= total_a_pagar]
+        
+        rect rgb(240, 249, 255)
+            note over CTR, FAC: Transacción Atómica ACID (PostgreSQL BEGIN ... COMMIT)
+            
+            %% Registro de Orden
+            CTR->>+ORD: create_pos_order(sucursal_id=1, canal='POS', total=200.00, estado='COMPLETADO')
+            ORD-->>-CTR: orden: Order(id=880)
+
+            %% Descuento de Existencias
+            loop [Por cada variante escaneada]
+                CTR->>+INV: deduct_stock_pos(sucursal_id=1, variante_id, cantidad, motivo='VENTA_POS')
+                INV-->>-CTR: stock_actualizado: bool
+            end
+
+            %% Registro de Pago y Vuelto
+            CTR->>CTR: calcularCambio(recibido=250.00, total=200.00) -> vuelto = Bs. 50.00
+            CTR->>+MP: insert(orden_id=880, metodo='EFECTIVO', monto=200.00, recibido=250.00, cambio=50.00)
+            MP-->>-CTR: pago_id = 912
+
+            %% Facturación Fiscal
+            CTR->>+FAC_CTR: emitirFacturaFiscal(orden_id=880, nit_ci, total=200.00, iva_13=26.00)
+            FAC_CTR->>+FAC: insert(orden_id=880, num_factura=1049, codigo_control="6B-A1-2C", qr="https://impuestos.gob.bo/...")
+            FAC-->>-FAC_CTR: factura: Invoice(id=512)
+            FAC_CTR-->>-CTR: FacturaFiscalDTO(id=512, codigo_control="6B-A1-2C")
+        end
+
+        %% Disparo de Hardware Físico
+        CTR->>+PRN: printEscPosReceipt(raw_bytes: ESC_POS_STREAM, cortar_papel=true, abrir_gaveta=true)
+        PRN-->>-CTR: HardwareStatus(status="SUCCESS", drawer_opened=true)
+
+        CTR-->>-IU: 201 Created: PosSaleResultDTO(orden_id=880, factura_id=512, cambio=50.00)
+        IU-->>-Cajero: mostrarResumenVuelto(vuelto=50.00, ticket_impreso=true)
+    end
 ```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU19[Paso 1: El cajero ingresa al terminal de punto de venta los ítems seleccionados por el cliente, el total a pagar (Bs. 200.00), el medio de pago EFECTIVO, el efectivo recibido (Bs. 250.00) y los datos fiscales (NIT 1029384).]`**
-- **`CU19[Paso 1.1: La interfaz U_PuntoDeVentaPOS envía la petición HTTP POST /api/v1/pos/orders al controlador CTR_POS adjuntando el payload completo con el session_id=45 de la caja activa.]`**
-- **`CU19[Paso 1.2: El controlador CTR_POS consulta la entidad CE_SesionCaja (CashShift) ejecutando get_session(session_id=45) para constatar que el turno se encuentra con session_status = 'ABIERTA' y pertenece al cajero y sucursal.]`**
-- **`CU19[Paso 1.3: Dentro del bloque transaccional ACID de venta mostrador, CTR_POS persiste la venta en CE_Orden ejecutando insert_order(branch_id=1, channel='POS', total=200.00, status='COMPLETADO'), retornando order_id = 880.]`**
-- **`CU19[Paso 1.4: CTR_POS invoca deduct_stock(branch_id=1, items) en la entidad CE_Inventario para descontar existencias físicas con bloqueo pesimista y asentar el egreso en el Kardex (InventoryLedger: VENTA), retornando stock_deducted_ok.]`**
-- **`CU19[Nota de Cálculo: En tiempo real el sistema calcula el vuelto o cambio a entregar al cliente: Vuelta = Recibido - Total = 250.00 - 200.00 = Bs. 50.00.]`**
-- **`CU19[Paso 1.5: CTR_POS inserta en la entidad CE_MedioDePago el cobro polimórfico en efectivo ejecutando insert_payment(order_id=880, type='EFECTIVO', amount=200.00, cash_received=250.00, cash_change=50.00), retornando pay_ok.]`**
-- **`CU19[Paso 1.6: CTR_POS delega a CTR_Facturacion la emisión de la factura oficial computarizada ejecutando issue_invoice(order_id=880, nit='1029384', total=200.00).]`**
-- **`CU19[Paso 1.6.1: CTR_Facturacion registra en la entidad CE_Factura el comprobante legal computarizado con IVA 13% (tax_amount=26.00) y código de control, retornando invoice_id = 512 y el objeto invoice_data al controlador.]`**
-- **`CU19[Paso 1.7: CTR_POS envía el comando de impresión térmica a Dispositivo_Impresora ejecutando print_receipt(raw_thermal_data, width=80mm) con apertura automática de la gaveta de efectivo, retornando print_ok.]`**
-- **`CU19[Retorno HTTP: El controlador CTR_POS retorna HTTP 200 OK con order_id = 880 y change = Bs. 50.00 a la interfaz U_PuntoDeVentaPOS.]`**
-- **`CU19[Retorno IU: U_PuntoDeVentaPOS despliega en pantalla la confirmación de venta exitosa, el comprobante y la notificación mostrarCambioYConfirmacion(vuelto=Bs. 50.00, gaveta_abierta) para que el cajero entregue el vuelto al cliente.]`**
+- **`CU19[Paso 1: El cajero ingresa al terminal de punto de venta los ítems escaneados, el total a pagar (Bs. 200.00), el efectivo recibido (Bs. 250.00) y los datos fiscales (NIT/CI).]`**
+- **`CU19[Paso 2: La interfaz envía la solicitud HTTP POST /api/v1/pos/orders con el DTO validado al controlador CTR_POS adjuntando el session_id de la caja activa.]`**
+- **`CU19[Paso 3: El controlador consulta CE_SesionCaja verificando que el turno se encuentre con session_status = 'ABIERTA'; si no lo está, rechaza la operación con error 403 Forbidden.]`**
+- **`CU19[Paso 4: [Transacción ACID] Se crea el registro de la venta en CE_Orden con canal='POS' y estado='COMPLETADO'.]`**
+- **`CU19[Paso 5: [loop: Por cada variante] Se descuenta el stock físico en CE_Inventario y se registra el egreso en el Kardex.]`**
+- **`CU19[Paso 6: Se calcula el vuelto exacto (Bs. 50.00) y se persiste el pago en efectivo en CE_Pago vinculando recibido y cambio.]`**
+- **`CU19[Paso 7: Se delega a CTR_Facturacion la emisión de la factura computarizada oficial con IVA 13% y código de control en CE_Factura.]`**
+- **`CU19[Paso 8: Se despacha la trama binaria ESC/POS a EXT_Impresora para imprimir el ticket de 80mm y enviar el pulso de apertura de la gaveta de dinero.]`**
+- **`CU19[Paso 9: La interfaz recibe la confirmación exitosa y despliega el monto de vuelto que el cajero debe entregar al cliente.]`**
 
 ---
 
@@ -1563,10 +1630,10 @@ sequenceDiagram
 - **Paquete de Arquitectura:** `paquete_reservas_y_citas`
 - **Actores involucrados:** Cliente
 - **Actor Iniciador:** Cliente Autenticado
-- **Propósito:** Apartar hasta 5 prendas del catálogo digital para probárselas en una sucursal física en fecha y hora fija, abonando una seña del 50% para retención de stock.
+- **Propósito:** Apartar hasta 5 prendas del catálogo digital para probárselas en una sucursal física en fecha y hora fija, abonando una seña del 50% para retención de stock, garantizando disponibilidad y emitiendo un voucher con código QR.
 - **Precondición:** Cliente autenticado, prendas con disponibilidad en la sucursal elegida y horario hábil.
-- **Postcondición:** Reserva creada con código RES-XXXXXX, stock bloqueado por 48 horas y comprobante de seña generado.
-- **Excepciones / Flujos Alternos:** E1: Superar el límite de 5 prendas. E2: Pago de seña no autorizado.
+- **Postcondición:** Reserva creada con código RES-XXXXXX, stock bloqueado por 48 horas y comprobante de seña generado con token QR.
+- **Excepciones / Flujos Alternos:** E1: Superar el límite de 5 prendas (`LimitePrendasExcedidoException`). E2: Pago de seña no autorizado en pasarela (`PaymentFailedException`).
 
 #### Trazabilidad en Código Fuente:
 - **Backend Router:** [`backend/app/packages/paquete_reservas_y_citas/routers.py`](file:///backend/app/packages/paquete_reservas_y_citas/routers.py)
@@ -1574,58 +1641,69 @@ sequenceDiagram
 - **Frontend Web Component:** [`frontend-web/src/app/packages/paquete_reservas_y_citas/customer-reservations/customer-reservations.component.ts`](file:///frontend-web/src/app/packages/paquete_reservas_y_citas/customer-reservations/customer-reservations.component.ts)
 - **Mobile Flutter View:** [`mobile/lib/src/packages/paquete_reservas_y_citas/reserve_fitting_view.dart`](file:///mobile/lib/src/packages/paquete_reservas_y_citas/reserve_fitting_view.dart)
 
-
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    actor C as Cliente
-    participant IU as IU_ReservarProbador
-    participant CTR as CTR_Reservas
-    participant CTR_PP as CTR_PayPal
-    participant API_PP as PayPal_API
-    participant CE_I as CE_Inventario
-    participant CE_R as CE_Reserva
-    participant CE_L as CE_LibroMayor
+    autonumber
+    actor C as «actor»<br/>:Cliente
+    participant IU as «boundary»<br/>IU_Reserva : ReserveFittingComponent
+    participant CTR as «control»<br/>CTR_Res : ReservationsRouter
+    participant PAS as «external»<br/>PAS_PayPal : PayPalGatewayService
+    participant CE_I as «entity»<br/>CE_Inventario : InventoryModel
+    participant CE_R as «entity»<br/>CE_Reserva : CustomerReservationModel
+    participant CE_K as «entity»<br/>CE_Kardex : InventoryLedgerModel
+    participant NOTIF as «control»<br/>CTR_Notif : PushBrokerService
 
-    C->>+IU: 1: elegirVariante(color, talla)
-    IU->>+CTR: 2: get_branch_availability(product_id, variant_id)
-    CTR-->>-IU: 3: [(branch_id, stock)]
-    C->>+IU: 4: elegirSucursal(fecha, hora, medioPago)
-    opt E1: Fuera de horario o E2: Más de 5 prendas
-        Note over IU: Bloquea y notifica regla operativa
+    C->>+IU: solicitarReservaProbador(sucursal_id: UUID, fecha_cita: DateTime, items: List[ItemReservaDTO])
+    
+    %% Regla de Negocio: Límite de 5 prendas
+    alt [len(items) > 5]
+        IU-->>C: mostrarError("El límite máximo por cita es de 5 prendas")
+    else [len(items) <= 5]
+        IU->>+CTR: POST /api/v1/reservations/quote-deposit (items)
+        CTR->>CTR: calcularTotalYDeposito(items) -> total = Bs 400.00, seña_50_pct = Bs 200.00
+        CTR-->>-IU: 200 OK: CotizacionSeniaDTO(total=400.00, senia=200.00)
     end
-    IU->>+CTR_PP: 5: create_order(app_amount_bs)
-    CTR_PP->>+API_PP: 6: POST /v2/checkout/orders
-    API_PP-->>-CTR_PP: 7: order_id + approve_url
-    CTR_PP-->>IU: 8: approve_url
-    IU->>+CTR_PP: 9: capture_order(order_id)
-    CTR_PP->>+API_PP: 10: POST /v2/checkout/orders/{id}/capture
-    API_PP-->>-CTR_PP: 11: COMPLETED + payer
-    CTR_PP-->>-IU: 12: VERIFIED
-    IU->>+CTR: 13: create_reservation(items, payment_ref)
-    CTR->>+CTR_PP: 14: verify_completed_order(order_id)
-    CTR_PP-->>-CTR: 15: VERIFIED
-    CTR->>+CE_I: 16: descontar_stock(variant_ids, qty)
-    CE_I-->>-CTR: 17: stock_descontado
-    CTR->>+CE_L: 18: insert_movimiento(RESERVA)
-    CE_L-->>-CTR: 19: ok
-    CTR->>+CE_R: 20: insert_reservation(PENDING, expires_at)
-    CE_R-->>-CTR: 21: reservation_code RES-XXXXXX
-    CTR-->>-IU: 22: {reservation_code, total, deposit}
-    IU-->>-C: 23: Confirmación y código de reserva
-    Note over C,CE_L: La reserva expira a las 48 horas si no se cobra el saldo
+
+    %% Cobro de la Seña del 50%
+    C->>+IU: confirmarPagoSenia(metodo="PAYPAL", auth_data)
+    IU->>+PAS: createAndCaptureOrder(amount=200.00, currency="BOB")
+    alt [Pago de seña rechazado / Fondos insuficientes]
+        PAS-->>IU: PaymentFailedException()
+        IU-->>C: mostrarAlertaPago("Transacción no autorizada. Intenta con otro medio.")
+    else [Pago de seña exitoso]
+        PAS-->>-IU: CaptureResponse(status="COMPLETED", tx_id="TX-RES-918")
+        
+        %% Creación de la Reserva
+        IU->>+CTR: POST /api/v1/reservations/confirm (sucursal_id, fecha_cita, items, tx_id="TX-RES-918", seña=200.00)
+        
+        loop [Por cada prenda a apartar]
+            CTR->>+CE_I: transferirADisponibilidadReserva(sucursal_id, variante_id, cant=1)
+            CE_I-->>-CTR: stock_apartado: bool
+            CTR->>+CE_K: registrarMovimiento(tipo='BLOQUEO_RESERVA_PROBADOR', cant=-1)
+            CE_K-->>-CTR: asiento_id
+        end
+
+        CTR->>+CE_R: create_reservation(cliente_id, sucursal_id, fecha_cita, seña_pagada=200.00, expires_at=fecha_cita+48h, estado='RESERVADA')
+        CE_R-->>-CTR: reserva: CustomerReservation(codigo="RES-2026-4412", qr_token="eyJhbGciOi...")
+
+        CTR->>+NOTIF: despacharConfirmacionCita(cliente_id, "Tu cita y vestidor están reservados. Código: RES-2026-4412")
+        NOTIF-->>-CTR: push_ok
+
+        CTR-->>-IU: 201 Created: ReservationResultDTO(codigo="RES-2026-4412", qr_url="/qr/res-4412.png", saldo_restante=200.00)
+        IU-->>-C: mostrarTicketDigitalConQR(codigo="RES-2026-4412", validez="48 horas")
+    end
 ```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU26[Paso 1: El cliente selecciona tallas y colores de hasta 5 prendas desde la app o web.]`**
-- **`CU26[Paso 1.1: La interfaz consulta la disponibilidad física por sucursal en CE_Inventario.]`**
-- **`CU26[Paso 2: El cliente selecciona fecha, hora de cita y abona la seña/anticipo de garantía.]`**
-- **`CU26[Paso 2.1: El controlador de pasarelas procesa el depósito de anticipo mediante PayPal API retornando estado COMPLETED.]`**
-- **`CU26[Paso 2.2: Se invoca la creación formal de la reserva (POST /api/v1/reservations).]`**
-- **`CU26[Paso 2.3: Se bloquea el stock físico de las prendas seleccionadas en CE_Inventario.]`**
-- **`CU26[Paso 2.4: Se asienta el bloqueo preventivo en el libro mayor contable CE_LibroMayor.]`**
-- **`CU26[Paso 2.5: Se persiste la reserva en estado 'PENDING' con código correlativo (RES-AAAA-XXXXXX) y expiración a 48 horas.]`**
-- **`CU26[Paso 3: El cliente recibe confirmación en pantalla y comprobante push/correo con su código de atención.]`**
+- **`CU26[Paso 1: El cliente selecciona hasta un máximo de 5 prendas del catálogo digital, indicando la sucursal y la fecha/hora para la prueba física.]`**
+- **`CU26[Paso 2: La interfaz valida que no se supere el límite de 5 prendas y solicita la cotización de la seña (50%) a CTR_Reservas.]`**
+- **`CU26[Paso 3: El cliente confirma el pago del anticipo de garantía a través de la pasarela PAS_PayPal.]`**
+- **`CU26[Paso 4: Confirmado el pago de la seña, la interfaz despacha la solicitud HTTP POST /api/v1/reservations/confirm al controlador.]`**
+- **`CU26[Paso 5: [loop: Por cada prenda] El controlador transfiere la unidad de stock disponible a stock apartado en CE_Inventario y asienta el bloqueo en CE_Kardex.]`**
+- **`CU26[Paso 6: Se persiste la reserva en CE_Reserva con estado 'RESERVADA', código correlativo único (RES-2026-XXXX) y vigencia de 48 horas.]`**
+- **`CU26[Paso 7: El servicio de notificaciones despacha una alerta push/correo con la confirmación de la cita y el resumen de la seña.]`**
+- **`CU26[Paso 8: La interfaz despliega el voucher digital interactivo con el código QR para presentación física en el probador.]`**
 
 ---
 
@@ -1928,10 +2006,10 @@ sequenceDiagram
 - **Paquete de Arquitectura:** `paquete_inteligente_y_analitica`
 - **Actores involucrados:** Cliente
 - **Actor Iniciador:** Cliente en App Móvil o Web
-- **Propósito:** Permitir al usuario probarse virtualmente prendas del catálogo sobre su propia fotografía o en cámara en vivo, ajustando la prenda al cuerpo mediante modelos de Inteligencia Artificial (IDM-VTON / MediaPipe) y sugiriendo la talla ideal según medidas.
-- **Precondición:** Prenda con imagen de alta definición y fotografía del usuario o cámara frontal activa.
-- **Postcondición:** Visualización fotorrealista de la prenda colocada sobre el cuerpo y opción de añadir la talla recomendada al carrito o reservarla.
-- **Excepciones / Flujos Alternos:** E1: Fotografía no contiene una persona detectable. E2: Servicio de inferencia no responde (fallback a motor local).
+- **Propósito:** Permitir al usuario probarse virtualmente prendas del catálogo sobre su propia fotografía, segmentando automáticamente el cuerpo mediante modelos de Inteligencia Artificial (MediaPipe / U2Net), calculando la talla ideal por medidas antropométricas y renderizando la prenda de forma fotorrealista con cascada de inferencia en la nube (FASHN.ai / IDM-VTON) y fallback local afín.
+- **Precondición:** Prenda con textura HD catalogada y fotografía del usuario con detección de silueta humana completa.
+- **Postcondición:** Visualización fotorrealista de la prenda ajustada al cuerpo, diagnóstico de talla recomendada y opción de añadirla directamente al carrito o reservarla en tienda.
+- **Excepciones / Flujos Alternos:** E1: Fotografía no contiene una persona detectable (`HumanDetectionException`). E2: Servicio de inferencia en la nube no responde (fallback automático a motor local de warping afín).
 
 #### Trazabilidad en Código Fuente:
 - **Backend Router:** [`backend/app/packages/paquete_inteligente_y_analitica/virtual_tryon/routers.py`](file:///backend/app/packages/paquete_inteligente_y_analitica/virtual_tryon/routers.py)
@@ -1939,52 +2017,73 @@ sequenceDiagram
 - **Frontend Web Component:** [`frontend-web/src/app/packages/paquete_inteligente_y_analitica/virtual-tryon/virtual-tryon.component.ts`](file:///frontend-web/src/app/packages/paquete_inteligente_y_analitica/virtual-tryon/virtual-tryon.component.ts)
 - **Mobile Flutter View:** [`mobile/lib/src/packages/paquete_inteligente_y_analitica/virtual_tryon_view.dart`](file:///mobile/lib/src/packages/paquete_inteligente_y_analitica/virtual_tryon_view.dart)
 
-
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    actor C as Cliente
-    participant IU as IU_Vestidor
-    participant CTR as CTR_Analitica
-    participant VTON as VirtualTryonAI
-    participant HF as FASHN_HF
-    participant CE_P as CE_Prenda
+    autonumber
+    actor C as «actor»<br/>:Cliente
+    participant IU as «boundary»<br/>IU_Vestidor : VirtualTryonComponent
+    participant CTR as «control»<br/>CTR_IA : VirtualTryonRouter
+    participant SVC_SIZE as «control»<br/>SVC_Sizing : SizingEngineService
+    participant SVC_VTON as «control»<br/>SVC_VTON : VtonPipelineService
+    participant EXT_HF as «external»<br/>EXT_FASHN : FASHN_Cloud_API
+    participant CE_P as «entity»<br/>CE_Prenda : ProductVariantModel
+    participant CE_M as «entity»<br/>CE_TablaTallas : SizeMeasurementModel
 
-    C->>+IU: 1: elegir_prenda(product_id)
-    C->>+IU: 2: subir_foto(person_image)
-    IU->>+CTR: 3: remove_background(photo)
-    CTR->>+VTON: 4: segmentar_persona(rembg u2net)
-    VTON-->>-CTR: 5: imagen_sin_fondo
-    CTR-->>-IU: 6: imagen_sin_fondo
-    C->>+IU: 7: ingresar_medidas(estatura, peso, pecho, cintura)
-    IU->>+CTR: 8: simulate_talla(medidas, product_id)
-    CTR->>+CE_P: 9: get_product(product_id)
-    CE_P-->>-CTR: 10: producto (sizes, measurements)
-    CTR-->>-IU: 11: {talla_recomendada, calce_por_zona}
-    C->>+IU: 12: generate_vton(persona, prenda)
-    IU->>+CTR: 13: generar_imagen(persona, prenda)
-    CTR->>+VTON: 14: ejecutar_pipeline(persona, prenda)
-    alt Motor de generacion (cascada nube)
-        VTON->>+HF: 15: FASHN.ai tryon
-        HF-->>-VTON: 16: imagen_fotorrealista
-    else Motor local fallback
-        VTON->>VTON: 15a: pose + amoldado anatomico
+    C->>+IU: cargarFotografiaYPrenda(foto_cliente: File, producto_id: UUID)
+    
+    %% Paso 1: Remoción de Fondo y Detección Anatómica
+    IU->>+CTR: POST /api/v1/ia/segment-person (multipart: image/jpeg)
+    CTR->>+SVC_VTON: segmentarSiluetaHumana(raw_image: Bytes): SegmentedMaskDTO
+    alt [No se detecta pose humana completa en la imagen]
+        SVC_VTON-->>CTR: HumanDetectionException(confidence < 0.85)
+        CTR-->>IU: 422 Unprocessable Entity: {error: "No se identificó cuerpo humano completo"}
+        IU-->>C: mostrarError("Sube una foto de cuerpo completo con buena iluminación")
+    else [Detección de pose válida (MediaPipe / U2Net)]
+        SVC_VTON-->>-CTR: SegmentedMaskDTO(image_no_bg_url, bounding_box)
+        CTR-->>-IU: 200 OK: {segmented_url: "/tmp/masks/usr_91.png"}
     end
-    VTON-->>-CTR: 17: imagen_resultado + modelo_usado
-    CTR-->>-IU: 18: {imagen_vestida, modelo}
-    IU-->>-C: 19: Mostrar imagen probada en pantalla
-    C->>+IU: 20: agregar_al_carrito / reservar_en_tienda
+
+    %% Paso 2: Cálculo Antropométrico de Talla
+    C->>+IU: ingresarMedidasCorporales(estatura_cm: 175, peso_kg: 70, pecho_cm: 98, cintura_cm: 82)
+    IU->>+CTR: POST /api/v1/ia/recommend-size (medidas: AntropometriaDTO, producto_id: UUID)
+    CTR->>+SVC_SIZE: calcularTallaOptima(medidas, producto_id)
+    SVC_SIZE->>+CE_M: get_measurements_by_product(producto_id)
+    CE_M-->>-SVC_SIZE: SizeMatrix(S=[88-92], M=[96-100], L=[104-108])
+    SVC_SIZE->>SVC_SIZE: evaluarHolguraTension(pecho_cm=98 -> Match Talla 'M', calce='Slim Fit')
+    SVC_SIZE-->>-CTR: RecomendacionTallaDTO(talla='M', ajuste='Exacto en pecho, holgado en cintura', score=0.94)
+    CTR-->>-IU: 200 OK: RecomendacionTallaDTO
+    IU-->>C: renderizarSugerenciaTalla("Tu talla ideal es M (94% coincidencia)")
+
+    %% Paso 3: Renderizado de Ropa Virtual (VTON con Cascada de Fallback)
+    C->>+IU: ejecutarPruebaVirtual(variante_id: UUID, modo_render: EnumModo)
+    IU->>+CTR: POST /api/v1/ia/render-vton (persona_url, prenda_id, modo)
+    CTR->>+CE_P: get_garment_texture_hd(prenda_id)
+    CE_P-->>-CTR: GarmentAsset(hd_texture_url, category="TOP")
+    CTR->>+SVC_VTON: ejecutarInferenciaVTON(person_masked, garment_hd)
+
+    alt [Inferencia en Nube Primaria: FASHN.ai API Activa y con Cuota]
+        SVC_VTON->>+EXT_HF: POST /v1/run (model="idm-vton", garment_img, person_img)
+        EXT_HF-->>-SVC_VTON: InferenceResult(status="SUCCESS", rendered_image_url)
+    else [Fallback Local: FASHN.ai no responde / Timeout > 8s]
+        SVC_VTON->>SVC_VTON: ejecutarWarpingLocalAffine(thin_plate_spline, keypoints_pose)
+    end
+
+    SVC_VTON-->>-CTR: RenderResponseDTO(rendered_url, engine_used="FASHN_CLOUD" | "LOCAL_WARP")
+    CTR-->>-IU: 200 OK: RenderResponseDTO
+    IU-->>-C: mostrarPrendaPuestaEnCuerpo(zoom_habilitado=true)
+    C->>+IU: clickBotonAccionDirecta("Agregar Talla M Recomendada al Carrito")
+    IU-->>-C: carritoActualizadoConTallaM()
 ```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU32[Paso 1: El cliente selecciona una prenda del catálogo y sube su fotografía de cuerpo completo.]`**
-- **`CU32[Paso 2: El sistema remueve automáticamente el fondo de la fotografía mediante el modelo u2net / rembg.]`**
+- **`CU32[Paso 1: El cliente sube su fotografía de cuerpo completo y selecciona la prenda que desea probarse.]`**
+- **`CU32[Paso 2: La interfaz envía la imagen a CTR_IA; si no se detecta silueta humana se aborta con error 422 y sugerencia al cliente.]`**
 - **`CU32[Paso 3: El cliente ingresa sus parámetros antropométricos (estatura, peso, pecho, cintura y cadera).]`**
-- **`CU32[Paso 4: El motor de sizing compara las medidas con la tabla de tallas oficial de CE_Prenda recomendando la talla ideal.]`**
-- **`CU32[Paso 5: Se dispara el renderizado virtual de la prenda sobre la fotografía del cliente (Virtual Try-On / VTON).]`**
-- **`CU32[Paso 5.1: [alt: FASHN.ai / Local Fallback] El pipeline ejecuta el modelo generativo de ropa o amoldado anatómico.]`**
-- **`CU32[Paso 6: El cliente visualiza el resultado fotorrealista con controles de rotación y zoom.]`**
-- **`CU32[Paso 7: El cliente procede a añadir la prenda y talla recomendada directamente al carrito (CU17) o a reservarla (CU26).]`**
+- **`CU32[Paso 4: El motor de sizing compara las medidas con la matriz oficial en CE_TablaTallas diagnosticando la talla recomendada.]`**
+- **`CU32[Paso 5: Se dispara la prueba virtual en CTR_IA recuperando la textura de alta definición en CE_Prenda.]`**
+- **`CU32[Paso 6: [alt: FASHN Cloud vs Fallback Local] El pipeline intenta la inferencia fotorrealista en la nube (IDM-VTON); si la nube no responde en 8 segundos conmuta transparentemente a warping afín local.]`**
+- **`CU32[Paso 7: La interfaz renderiza el resultado en alta resolución permitiendo añadir la talla ideal directamente al carrito o agendar reserva física.]`**
 
 ---
 

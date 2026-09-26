@@ -301,37 +301,33 @@ flowchart LR
 
 ### CU10: Registrar compras e ingresos de mercadería
 
-**Descripción**: Diagrama de comunicación para Registrar compras e ingresos de mercadería.
+**Descripción**: Diagrama de comunicación formal para Registrar compras e ingresos de mercadería con recálculo de Costo Promedio Ponderado (CPP) y asiento de Kardex.
 
 ```mermaid
 flowchart LR
     classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
-    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
-    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
-    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
-    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    classDef boundaryStyle fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f5f3ff,stroke:#6d28d9,stroke-width:1.5px,color:#4c1d95;
+    classDef entityStyle fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#064e3b;
 
-    E(("👤 :Encargado de Sucursal")):::actorStyle
-    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Ingreso_Mercaderia</b>"]:::boundaryStyle
-    CTR["&laquo;control&raquo;<br/><b>:Controlador_Inventario</b>"]:::controlStyle
-    CE_C["&laquo;entity&raquo;<br/><b>:Entidad_Compra_Proveedor</b>"]:::entityStyle
-    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario_Sucursal</b>"]:::entityStyle
-    CE_K["&laquo;entity&raquo;<br/><b>:Entidad_Kardex_Movimientos</b>"]:::entityStyle
+    E(("👤 :Encargado")):::actorStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Ingreso</b><br/><i>MerchandiseIntakeComponent</i>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Compras</b><br/><i>MerchandiseRouter</i>"]:::controlStyle
+    CE_PRV["&laquo;entity&raquo;<br/><b>:CE_Proveedor</b><br/><i>SupplierModel</i>"]:::entityStyle
+    CE_CMP["&laquo;entity&raquo;<br/><b>:CE_Compra</b><br/><i>PurchaseOrderModel</i>"]:::entityStyle
+    CE_INV["&laquo;entity&raquo;<br/><b>:CE_Inventario</b><br/><i>InventoryModel</i>"]:::entityStyle
+    CE_KDX["&laquo;entity&raquo;<br/><b>:CE_Kardex</b><br/><i>InventoryLedgerModel</i>"]:::entityStyle
 
-    E -- "1: ingresarLoteMercaderia(proveedor_id, sucursal_id, nro_factura, lista_prendas)" --> IU
-    IU -- "2: registrarIngresoMercaderia(datos_compra)" --> CTR
-    CTR -- "3: validarProveedorYSucursal(proveedor_id, sucursal_id)" --> CTR
-    CTR -- "4: crearCabeceraCompra(proveedor_id, sucursal_id, nro_factura, total_compra)" --> CE_C
-    CE_C -. "5: compra_id = 140" .-> CTR
-    CTR -- "6: registrarDetalleCompra(compra_id, variante_id, cantidad, costo_unitario)" --> CE_C
-    CE_C -. "7: detalle_guardado" .-> CTR
-    CTR -- "8: incrementarStockFisico(sucursal_id, variante_id, cantidad)" --> CE_I
-    CTR -- "9: actualizarCostoPromedioPonderado(variante_id, costo_unitario)" --> CE_I
-    CE_I -. "10: stock_y_costo_actualizados" .-> CTR
-    CTR -- "11: asentarMovimientoKardex(sucursal_id, variante_id, cantidad, tipo='INGRESO_COMPRA', ref='CMP-140')" --> CE_K
-    CE_K -. "12: asiento_kardex_registrado" .-> CTR
-    CTR -. "13: respuestaExitosa(compra_id=140, mensaje='Ingreso de mercadería completado')" .-> IU
-    IU -. "14: mostrarConfirmacion('Stock actualizado y costo promedio recalculado')" .-> E
+    E -- "1: registrarLoteIngreso(proveedor_id, sucursal, factura, items)" --> IU
+    IU -- "2: POST /inventory/merchandise-intakes" --> CTR
+    CTR -- "2.1: find_by_id(proveedor_id)" --> CE_PRV
+    CTR -- "2.2: create_purchase_order(proveedor_id, nro_fac)" --> CE_CMP
+    CTR -- "2.3: *[items] add_item(compra_id, variante_id, cant, costo)" --> CE_CMP
+    CTR -- "2.4: *[items] get_stock_and_cpp(sucursal, variante)" --> CE_INV
+    CTR -- "2.5: *[items] update_inventory(stock_adicional, nuevo_cpp)" --> CE_INV
+    CTR -- "2.6: *[items] registrarMovimiento(tipo='INGRESO', saldo)" --> CE_KDX
+    CTR -. "3: 201 Created: PurchaseSummaryDTO" .-> IU
+    IU -. "4: renderizarComprobanteIngreso()" .-> E
 ```
 
 ---
@@ -603,112 +599,87 @@ flowchart LR
 
 ### CU18: Procesar venta omnicanal (E-commerce / App Móvil)
 
-**Descripción**: Diagrama de comunicación para Procesar venta omnicanal (E-commerce / App Móvil).
+**Descripción**: Diagrama de comunicación formal para Procesar venta omnicanal con control de timeout de 5 minutos, custodia de 48 horas y facturación tributaria.
 
 ```mermaid
 flowchart LR
     classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
-    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
-    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
-    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
-    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    classDef boundaryStyle fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f5f3ff,stroke:#6d28d9,stroke-width:1.5px,color:#4c1d95;
+    classDef entityStyle fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#064e3b;
+    classDef externalStyle fill:#fffbeb,stroke:#b45309,stroke-width:1.5px,color:#78350f;
 
     C(("👤 :Cliente")):::actorStyle
-    IU["&laquo;boundary&raquo;<br/><b>:Interfaz_Checkout</b>"]:::boundaryStyle
-    CTR["&laquo;control&raquo;<br/><b>:Controlador_Ventas</b>"]:::controlStyle
-    PAS["&laquo;external&raquo;<br/><b>:Pasarela_De_Pagos</b>"]:::externalStyle
-    CE_I["&laquo;entity&raquo;<br/><b>:Entidad_Inventario</b>"]:::entityStyle
-    CE_O["&laquo;entity&raquo;<br/><b>:Entidad_Orden_Venta</b>"]:::entityStyle
-    CE_P["&laquo;entity&raquo;<br/><b>:Entidad_Registro_Pago</b>"]:::entityStyle
-    CTR_F["&laquo;control&raquo;<br/><b>:Controlador_Facturacion</b>"]:::controlStyle
-    CE_F["&laquo;entity&raquo;<br/><b>:Entidad_Factura_Fiscal</b>"]:::entityStyle
-    CE_NC["&laquo;entity&raquo;<br/><b>:Entidad_Nota_Credito</b>"]:::entityStyle
-    NOTIF["&laquo;control&raquo;<br/><b>:Servicio_Notificaciones_Push</b>"]:::controlStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Checkout</b><br/><i>CartModalComponent</i>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Ventas</b><br/><i>SalesService</i>"]:::controlStyle
+    PAS["&laquo;external&raquo;<br/><b>:PAS_PayPal</b><br/><i>PayPalGateway</i>"]:::externalStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b><br/><i>InventoryModel</i>"]:::entityStyle
+    CE_O["&laquo;entity&raquo;<br/><b>:CE_Orden</b><br/><i>SaleOrderModel</i>"]:::entityStyle
+    CTR_F["&laquo;control&raquo;<br/><b>:CTR_Fact</b><br/><i>InvoiceService</i>"]:::controlStyle
+    CE_F["&laquo;entity&raquo;<br/><b>:CE_Factura</b><br/><i>InvoiceModel</i>"]:::entityStyle
+    CE_NC["&laquo;entity&raquo;<br/><b>:CE_NotaCredito</b><br/><i>CreditNoteModel</i>"]:::entityStyle
+    NOTIF["&laquo;control&raquo;<br/><b>:CTR_Notif</b><br/><i>PushBrokerService</i>"]:::controlStyle
 
-    C -- "1: confirmarCompra(modalidad_entrega, sucursal_id, direccion, medio_pago, nit_ci)" --> IU
-    IU -- "1.1a: fijarCostoEnvio(Bs 0.00) y fijarPlazoCustodia(48 horas)" --> IU
-    IU -- "1.1b: calcularTarifaEnvioPorZona(direccion) -> costo_envio = Bs 15.00" --> IU
-    IU -- "2: iniciarCheckoutConReserva(datos_checkout)" --> CTR
-    CTR -- "3: bloquearStockTemporal(sucursal_id, variantes, cantidades)" --> CE_I
-    CE_I -. "4: stock_bloqueado_ok" .-> CTR
-    CTR -- "5: registrarOrdenPendiente(estado='PENDIENTE_PAGO', session_timeout=300s)" --> CE_O
-    CE_O -. "6: orden_id = 450, expires_at = now + 5min" .-> CTR
-    CTR -. "7: sesionIniciada(orden_id=450, tiempo_restante=300s)" .-> IU
-    IU -- "8a: notificarExpiracionOVerificarTimeout(orden_id=450)" --> CTR
-    CTR -- "9a: liberarStockBloqueado(sucursal_id, variantes, cantidades)" --> CE_I
-    CE_I -. "10a: stock_liberado_a_disponible" .-> CTR
-    CTR -- "11a: anularOrden(estado='CANCELADA_TIMEOUT')" --> CE_O
-    CE_O -. "12a: orden_anulada" .-> CTR
-    CTR -- "13a: despacharAlertaPush('Sesión de pago expiró. No se realizó ningún cargo. Prendas liberadas.')" --> NOTIF
-    NOTIF -. "14a: alerta_enviada" .-> CTR
-    CTR -. "15a: ordenCanceladaPorTiempo()" .-> IU
-    IU -. "16a: mostrarPantallaExpiracionConBotonReintentar()" .-> C
-    IU -- "8b: procesarCobroPasarela(monto_total, token_autorizacion)" --> PAS
-    PAS -. "9b: cobro_confirmado(ref_pasarela)" .-> IU
-    IU -- "10b: confirmarPagoOrden(orden_id=450, ref_pasarela)" --> CTR
-    CTR -- "11b: descontarDefinitivamenteStock(sucursal_id, variantes)" --> CE_I
-    CE_I -. "12b: stock_descontado" .-> CTR
-    CTR -- "13b: registrarComprobantePago(orden_id=450, ref_pasarela, estado='CONFIRMADO')" --> CE_P
-    CE_P -. "14b: pago_registrado" .-> CTR
-    CTR -- "15b: emitirFacturaFiscal(orden_id=450, nit_ci, total, iva_13)" --> CTR_F
-    CTR_F -- "16b: persistirFactura(codigo_control, qr)" --> CE_F
-    CE_F -. "17b: factura_id = 310" .-> CTR_F
-    CTR_F -. "18b: factura_generada" .-> CTR
-    CTR -- "19b: fijarPlazoRetiro(pickup_deadline = now + 48h, estado='LISTO_RETIRO')" --> CE_O
-    CTR -- "20b: notificarCliente('Tu pedido está listo para recoger en sucursal. Plazo máximo: 48 horas.')" --> NOTIF
-    CTR -- "21b: reingresarStockASucursal(sucursal_id, variantes)" --> CE_I
-    CE_I -. "22b: stock_retornado_a_exhibicion" .-> CTR
-    CTR -- "23b: emitirNotaDeCredito(cliente_id, monto_total, motivo='EXPIRACION_RETIRO_48H')" --> CE_NC
-    CE_NC -. "24b: nota_credito_code = 'NC-2026-9812'" .-> CTR
-    CTR -- "25b: notificarCliente('Plazo de 48h vencido. Prenda reingresada a stock y se generó tu Nota de Crédito NC-2026-9812.')" --> NOTIF
-    CTR -- "19c: generarGuiaDespacho(direccion, tarifa_envio, estado='PREPARANDO_DESPACHO')" --> CE_O
-    CTR -. "26b: respuestaExitosa(orden_id=450, factura_id=310, modalidad_entrega)" .-> IU
-    IU -. "27b: mostrarPantallaExito(resumen_compra, boton_descargar_factura)" .-> C
+    C -- "1: confirmarCheckout(modalidad, sucursal, nit, medio_pago)" --> IU
+    IU -- "1.1: [retiro] setCustodia48h() / [delivery] calcTarifa()" --> IU
+    IU -- "2: POST /checkout-session" --> CTR
+    CTR -- "2.1: select_for_update_stock(sucursal, items)" --> CE_I
+    CTR -- "2.2: create(estado='PENDIENTE_PAGO', timeout=300s)" --> CE_O
+    
+    %% Timeout
+    IU -- "3a: [timeout > 300s] POST /timeout-abort" --> CTR
+    CTR -- "3a.1: revertirBloqueoTemporal(sucursal, items)" --> CE_I
+    CTR -- "3a.2: update(estado='CANCELADA_TIMEOUT')" --> CE_O
+    CTR -- "3a.3: enviarPush('Sesión expirada sin cobro')" --> NOTIF
+
+    %% Pago Normal
+    IU -- "3b: captureOrder(monto, bob, token)" --> PAS
+    IU -- "4b: POST /confirm-payment(orden_id, tx_id)" --> CTR
+    CTR -- "4b.1: descontarStockFisicoDefinitivo(sucursal, items)" --> CE_I
+    CTR -- "4b.2: update(estado='PAGADA', tx_id)" --> CE_O
+    CTR -- "4b.3: emitirFacturaComputarizada(orden_id, total, iva_13)" --> CTR_F
+    CTR_F -- "4b.3.1: insert(num_fac, cod_control, qr)" --> CE_F
+    CTR -- "4b.4: [retiro] setCustodia48h() / [delivery] generarGuia()" --> CE_O
+    CTR -- "4b.5: notificarCliente('Pedido confirmado')" --> NOTIF
+    CTR -- "5b: [vencidas 48h] reingresarStockExhibicion()" --> CE_I
+    CTR -- "5b.1: [vencidas 48h] emitirNotaCredito(monto, motivo)" --> CE_NC
 ```
 
 ---
 
 ### CU19: Procesar venta presencial en caja
 
-**Descripción**: Diagrama de comunicación para Procesar venta presencial en caja.
+**Descripción**: Diagrama de comunicación formal para Procesar venta presencial en caja con validación de turno, control de efectivo y ticket térmico ESC/POS.
 
 ```mermaid
 flowchart LR
     classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
-    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
-    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
-    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
-    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    classDef boundaryStyle fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f5f3ff,stroke:#6d28d9,stroke-width:1.5px,color:#4c1d95;
+    classDef entityStyle fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#064e3b;
+    classDef externalStyle fill:#fffbeb,stroke:#b45309,stroke-width:1.5px,color:#78350f;
 
     Cajero(("👤 :Cajero")):::actorStyle
-    UI["&laquo;external&raquo;<br/><b>:U_PuntoDeVentaPOS</b>"]:::externalStyle
-    CTR["&laquo;control&raquo;<br/><b>:CTR_POS</b>"]:::controlStyle
-    SC["&laquo;entity&raquo;<br/><b>:CE_SesionCaja</b>"]:::entityStyle
-    INV["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
-    ORD["&laquo;entity&raquo;<br/><b>:CE_Orden</b>"]:::entityStyle
-    MP["&laquo;entity&raquo;<br/><b>:CE_MedioDePago</b>"]:::entityStyle
-    FAC_CTR["&laquo;external&raquo;<br/><b>:CTR_Facturacion</b>"]:::externalStyle
-    FAC["&laquo;entity&raquo;<br/><b>:CE_Factura</b>"]:::entityStyle
-    PRN["&laquo;external&raquo;<br/><b>:Dispositivo_Impresora</b>"]:::externalStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_POS</b><br/><i>PosComponent</i>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_POS</b><br/><i>PosService</i>"]:::controlStyle
+    SC["&laquo;entity&raquo;<br/><b>:CE_SesionCaja</b><br/><i>CashShiftModel</i>"]:::entityStyle
+    INV["&laquo;entity&raquo;<br/><b>:CE_Inventario</b><br/><i>InventoryModel</i>"]:::entityStyle
+    ORD["&laquo;entity&raquo;<br/><b>:CE_Orden</b><br/><i>OrderModel</i>"]:::entityStyle
+    MP["&laquo;entity&raquo;<br/><b>:CE_Pago</b><br/><i>PaymentModel</i>"]:::entityStyle
+    FAC_CTR["&laquo;control&raquo;<br/><b>:CTR_Fact</b><br/><i>InvoiceService</i>"]:::controlStyle
+    FAC["&laquo;entity&raquo;<br/><b>:CE_Factura</b><br/><i>InvoiceModel</i>"]:::entityStyle
+    PRN["&laquo;external&raquo;<br/><b>:EXT_Impresora</b><br/><i>EscPosPrinterDriver</i>"]:::externalStyle
 
-    Cajero -- "1: ingresarCobro(session_id=45, items, total=200.00, medio='EFECTIVO', recibido=250.00, NIT='1029384')" --> UI
-    UI -- "1.1: POST /api/v1/pos/orders (payload)" --> CTR
-    CTR -- "1.2: get_session(session_id=45)" --> SC
-    SC -. "1.2a: session_status = 'ABIERTA'" .-> CTR
-    CTR -- "1.3: insert_order(branch_id=1, channel='POS', total=200.00, status='COMPLETADO')" --> ORD
-    ORD -. "1.3a: order_id = 880" .-> CTR
-    CTR -- "1.4: deduct_stock(branch_id=1, items)" --> INV
-    INV -. "1.4a: stock_deducted_ok" .-> CTR
-    CTR -- "1.5: insert_payment(order_id=880, type='EFECTIVO', amount=200.00, cash_received=250.00, cash_change=50.00)" --> MP
-    MP -. "1.5a: pay_ok" .-> CTR
-    CTR -- "1.6: issue_invoice(order_id=880, nit='1029384', total=200.00)" --> FAC_CTR
-    FAC_CTR -- "1.6.1: insert(order_id=880, doc_type='FACTURA', subtotal=200.00, tax_amount=26.00)" --> FAC
-    FAC -. "1.6.1a: invoice_id = 512" .-> FAC_CTR
-    FAC_CTR -. "1.6.1b: invoice_data" .-> CTR
-    CTR -- "1.7: print_receipt(raw_thermal_data, width=80mm)" --> PRN
-    PRN -. "1.7a: print_ok" .-> CTR
-    CTR -. "1.8: HTTP 200 OK (order_id=880, change=50.00)" .-> UI
-    UI -. "1.9: mostrarCambioYConfirmacion(vuelto=Bs. 50.00, gaveta_abierta)" .-> Cajero
+    Cajero -- "1: ingresarVentaDirecta(sesion_id, items, recibido, nit)" --> IU
+    IU -- "2: POST /api/v1/pos/orders" --> CTR
+    CTR -- "2.1: get_active_shift(sesion_id)" --> SC
+    CTR -- "2.2: create_pos_order(sucursal, canal='POS', total)" --> ORD
+    CTR -- "2.3: *[items] deduct_stock_pos(variante_id, cant)" --> INV
+    CTR -- "2.4: insert(monto=200, recibido=250, cambio=50)" --> MP
+    CTR -- "2.5: emitirFacturaFiscal(orden_id, nit, iva_13)" --> FAC_CTR
+    FAC_CTR -- "2.5.1: insert(num_fac, cod_control, qr)" --> FAC
+    CTR -- "2.6: printEscPosReceipt(raw_bytes, cortar=true, abrir_gaveta=true)" --> PRN
+    IU -. "3: mostrarResumenVuelto(vuelto=50.00)" .-> Cajero
 ```
 
 ---
@@ -977,48 +948,37 @@ flowchart LR
 
 ### CU26: Agendar reserva de prendas para prueba física
 
-**Descripción**: Diagrama de comunicación para Agendar reserva de prendas para prueba física.
+**Descripción**: Diagrama de comunicación formal para Agendar reserva de prendas con límite de 5 ítems, seña de retención y voucher con código QR.
 
 ```mermaid
 flowchart LR
     classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
-    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
-    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
-    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
-    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    classDef boundaryStyle fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f5f3ff,stroke:#6d28d9,stroke-width:1.5px,color:#4c1d95;
+    classDef entityStyle fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#064e3b;
+    classDef externalStyle fill:#fffbeb,stroke:#b45309,stroke-width:1.5px,color:#78350f;
 
     C(("👤 :Cliente")):::actorStyle
-    IU["&laquo;boundary&raquo;<br/><b>:IU_ReservarProbador</b>"]:::boundaryStyle
-    CTR["&laquo;control&raquo;<br/><b>:CTR_Reservas</b>"]:::controlStyle
-    CTR_PP["&laquo;control&raquo;<br/><b>:CTR_PayPal</b>"]:::controlStyle
-    API_PP["&laquo;external&raquo;<br/><b>:PayPal_API</b>"]:::externalStyle
-    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b>"]:::entityStyle
-    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b>"]:::entityStyle
-    CE_L["&laquo;entity&raquo;<br/><b>:CE_LibroMayor</b>"]:::entityStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Reserva</b><br/><i>ReserveFittingComponent</i>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_Res</b><br/><i>ReservationsRouter</i>"]:::controlStyle
+    PAS["&laquo;external&raquo;<br/><b>:PAS_PayPal</b><br/><i>PayPalGatewayService</i>"]:::externalStyle
+    CE_I["&laquo;entity&raquo;<br/><b>:CE_Inventario</b><br/><i>InventoryModel</i>"]:::entityStyle
+    CE_R["&laquo;entity&raquo;<br/><b>:CE_Reserva</b><br/><i>CustomerReservationModel</i>"]:::entityStyle
+    CE_K["&laquo;entity&raquo;<br/><b>:CE_Kardex</b><br/><i>InventoryLedgerModel</i>"]:::entityStyle
+    NOTIF["&laquo;control&raquo;<br/><b>:CTR_Notif</b><br/><i>PushBrokerService</i>"]:::controlStyle
 
-    C -- "1: elegirVariante(color, talla)" --> IU
-    IU -- "2: get_branch_availability(product_id, variant_id)" --> CTR
-    CTR -. "3: [(branch_id, stock)]" .-> IU
-    C -- "4: elegirSucursal(fecha, hora, medioPago)" --> IU
-    IU -- "5: create_order(app_amount_bs)" --> CTR_PP
-    CTR_PP -- "6: POST /v2/checkout/orders" --> API_PP
-    API_PP -. "7: order_id + approve_url" .-> CTR_PP
-    CTR_PP -. "8: approve_url" .-> IU
-    IU -- "9: capture_order(order_id)" --> CTR_PP
-    CTR_PP -- "10: POST /v2/checkout/orders/{id}/capture" --> API_PP
-    API_PP -. "11: COMPLETED + payer" .-> CTR_PP
-    CTR_PP -. "12: VERIFIED" .-> IU
-    IU -- "13: create_reservation(items, payment_ref)" --> CTR
-    CTR -- "14: verify_completed_order(order_id)" --> CTR_PP
-    CTR_PP -. "15: VERIFIED" .-> CTR
-    CTR -- "16: descontar_stock(variant_ids, qty)" --> CE_I
-    CE_I -. "17: stock_descontado" .-> CTR
-    CTR -- "18: insert_movimiento(RESERVA)" --> CE_L
-    CE_L -. "19: ok" .-> CTR
-    CTR -- "20: insert_reservation(PENDING, expires_at)" --> CE_R
-    CE_R -. "21: reservation_code RES-XXXXXX" .-> CTR
-    CTR -. "22: {reservation_code, total, deposit}" .-> IU
-    IU -. "23: Confirmación y código de reserva" .-> C
+    C -- "1: solicitarReserva(sucursal, fecha, items <= 5)" --> IU
+    IU -- "2: POST /quote-deposit" --> CTR
+    CTR -. "2.1: CotizacionSeniaDTO(total=400, senia=200)" .-> IU
+    C -- "3: confirmarPagoSenia(auth_data)" --> IU
+    IU -- "4: captureOrder(monto=200, currency='BOB')" --> PAS
+    IU -- "5: POST /reservations/confirm(items, tx_id, seña=200)" --> CTR
+    CTR -- "5.1: *[items] transferirADisponibilidadReserva()" --> CE_I
+    CTR -- "5.2: *[items] registrarMovimiento(tipo='BLOQUEO')" --> CE_K
+    CTR -- "5.3: create_reservation(seña=200, expires=fecha+48h)" --> CE_R
+    CTR -- "5.4: despacharConfirmacionCita(push)" --> NOTIF
+    CTR -. "6: 201 Created: ReservationResultDTO" .-> IU
+    IU -. "7: mostrarTicketDigitalConQR(RES-2026-4412)" .-> C
 ```
 
 ---
@@ -1222,44 +1182,42 @@ flowchart LR
 
 ### CU32: Probador (vestidor) virtual IA y recomendación de talla (RA / VTON)
 
-**Descripción**: Diagrama de comunicación para Probador (vestidor) virtual IA y recomendación de talla (RA / VTON).
+**Descripción**: Diagrama de comunicación formal para Vestidor Virtual IA con detección de silueta, cálculo de tallas y cascada en nube con fallback local afín.
 
 ```mermaid
 flowchart LR
     classDef actorStyle fill:#ffffff,stroke:#111827,stroke-width:1.5px,color:#111827;
-    classDef boundaryStyle fill:#f9fafb,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a;
-    classDef controlStyle fill:#f9fafb,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
-    classDef entityStyle fill:#f9fafb,stroke:#059669,stroke-width:1.5px,color:#065f46;
-    classDef externalStyle fill:#f9fafb,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    classDef boundaryStyle fill:#eff6ff,stroke:#1d4ed8,stroke-width:1.5px,color:#1e3a8a;
+    classDef controlStyle fill:#f5f3ff,stroke:#6d28d9,stroke-width:1.5px,color:#4c1d95;
+    classDef entityStyle fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#064e3b;
+    classDef externalStyle fill:#fffbeb,stroke:#b45309,stroke-width:1.5px,color:#78350f;
 
     C(("👤 :Cliente")):::actorStyle
-    IU["&laquo;boundary&raquo;<br/><b>:IU_Vestidor</b>"]:::boundaryStyle
-    CTR["&laquo;control&raquo;<br/><b>:CTR_Analitica</b>"]:::controlStyle
-    VTON["&laquo;external&raquo;<br/><b>:VirtualTryonAI</b>"]:::externalStyle
-    HF["&laquo;external&raquo;<br/><b>:FASHN_HF</b>"]:::externalStyle
-    CE_P["&laquo;entity&raquo;<br/><b>:CE_Prenda</b>"]:::entityStyle
+    IU["&laquo;boundary&raquo;<br/><b>:IU_Vestidor</b><br/><i>VirtualTryonComponent</i>"]:::boundaryStyle
+    CTR["&laquo;control&raquo;<br/><b>:CTR_IA</b><br/><i>VirtualTryonRouter</i>"]:::controlStyle
+    SVC_SIZE["&laquo;control&raquo;<br/><b>:SVC_Sizing</b><br/><i>SizingEngineService</i>"]:::controlStyle
+    SVC_VTON["&laquo;control&raquo;<br/><b>:SVC_VTON</b><br/><i>VtonPipelineService</i>"]:::controlStyle
+    EXT_HF["&laquo;external&raquo;<br/><b>:EXT_FASHN</b><br/><i>FashnAiCloudAPI</i>"]:::externalStyle
+    CE_P["&laquo;entity&raquo;<br/><b>:CE_Prenda</b><br/><i>ProductVariantModel</i>"]:::entityStyle
+    CE_M["&laquo;entity&raquo;<br/><b>:CE_TablaTallas</b><br/><i>SizeMeasurementModel</i>"]:::entityStyle
 
-    C -- "1: elegir_prenda(product_id)" --> IU
-    C -- "2: subir_foto(person_image)" --> IU
-    IU -- "3: remove_background(photo)" --> CTR
-    CTR -- "4: segmentar_persona(rembg u2net)" --> VTON
-    VTON -. "5: imagen_sin_fondo" .-> CTR
-    CTR -. "6: imagen_sin_fondo" .-> IU
-    C -- "7: ingresar_medidas(estatura, peso, pecho, cintura)" --> IU
-    IU -- "8: simulate_talla(medidas, product_id)" --> CTR
-    CTR -- "9: get_product(product_id)" --> CE_P
-    CE_P -. "10: producto (sizes, measurements)" .-> CTR
-    CTR -. "11: {talla_recomendada, calce_por_zona}" .-> IU
-    C -- "12: generate_vton(persona, prenda)" --> IU
-    IU -- "13: generar_imagen(persona, prenda)" --> CTR
-    CTR -- "14: ejecutar_pipeline(persona, prenda)" --> VTON
-    VTON -- "15: FASHN.ai tryon" --> HF
-    HF -. "16: imagen_fotorrealista" .-> VTON
-    VTON -- "15a: pose + amoldado anatomico" --> VTON
-    VTON -. "17: imagen_resultado + modelo_usado" .-> CTR
-    CTR -. "18: {imagen_vestida, modelo}" .-> IU
-    IU -. "19: Mostrar imagen probada en pantalla" .-> C
-    C -- "20: agregar_al_carrito / reservar_en_tienda" --> IU
+    C -- "1: cargarFotografiaYPrenda(foto, prenda_id)" --> IU
+    IU -- "2: POST /segment-person (image)" --> CTR
+    CTR -- "2.1: segmentarSiluetaHumana(raw_image)" --> SVC_VTON
+    
+    C -- "3: ingresarMedidas(estatura, peso, pecho, cintura)" --> IU
+    IU -- "4: POST /recommend-size (medidas, prenda_id)" --> CTR
+    CTR -- "4.1: calcularTallaOptima(medidas, prenda_id)" --> SVC_SIZE
+    SVC_SIZE -- "4.1.1: get_measurements_by_product(id)" --> CE_M
+    
+    C -- "5: ejecutarPruebaVirtual(variante_id)" --> IU
+    IU -- "6: POST /render-vton(persona_url, prenda_id)" --> CTR
+    CTR -- "6.1: get_garment_texture_hd(prenda_id)" --> CE_P
+    CTR -- "6.2: ejecutarInferenciaVTON(person_masked, garment_hd)" --> SVC_VTON
+    SVC_VTON -- "6.2.1a: [nube] run(garment, person)" --> EXT_HF
+    SVC_VTON -- "6.2.1b: [fallback local] ejecutarWarpingLocalAffine()" --> SVC_VTON
+    
+    C -- "7: agregarTallaRecomendadaAlCarrito()" --> IU
 ```
 
 ---

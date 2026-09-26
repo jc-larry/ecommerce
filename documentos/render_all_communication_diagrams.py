@@ -37,6 +37,14 @@ def parse_all_40_cus():
         entities = []
         externals = []
         
+        def clean_node_name(raw):
+            clean = re.sub(r'«[^»]*»|<[^>]*>', '', raw).strip()
+            clean = re.sub(r'^[^\w]+', '', clean).strip()
+            parts = clean.split(':')
+            if len(parts) > 1 and parts[0].strip():
+                clean = parts[0].strip()
+            return clean
+
         for line in diag.splitlines():
             line = line.strip()
             m_act = re.match(r'^actor\s+([\w_]+)(?:\s+as\s+(.+))?$', line)
@@ -44,6 +52,7 @@ def parse_all_40_cus():
                 alias = m_act.group(1)
                 name = (m_act.group(2) or alias).strip('"\'')
                 name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+                name = clean_node_name(name)
                 if not any(a['alias'] == alias for a in actors):
                     actors.append({'alias': alias, 'name': name})
                 continue
@@ -53,14 +62,16 @@ def parse_all_40_cus():
                 alias = m_part.group(1)
                 name = (m_part.group(2) or alias).strip('"\'')
                 name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+                raw_full = name
+                name = clean_node_name(name)
                 
-                if alias.startswith('IU') or 'Interfaz' in name or 'IU_' in name:
+                if alias.startswith('IU') or 'Interfaz' in raw_full or 'IU_' in raw_full or 'boundary' in raw_full.lower():
                     if not any(b['alias'] == alias for b in boundaries):
                         boundaries.append({'alias': alias, 'name': name})
-                elif alias.startswith('CTR') or 'Controlador' in name or 'Service' in name or 'Servicio' in name or alias.startswith('SVC'):
+                elif alias.startswith('CTR') or 'Controlador' in raw_full or 'Service' in raw_full or 'Servicio' in raw_full or alias.startswith('SVC') or 'control' in raw_full.lower():
                     if not any(c['alias'] == alias for c in controllers):
                         controllers.append({'alias': alias, 'name': name})
-                elif alias.startswith('CE') or 'Entidad' in name or 'CE_' in name:
+                elif alias.startswith('CE') or 'Entidad' in raw_full or 'CE_' in raw_full or 'entity' in raw_full.lower():
                     if not any(e['alias'] == alias for e in entities):
                         entities.append({'alias': alias, 'name': name})
                 else:
@@ -233,11 +244,13 @@ def generate_bce_svg(cu):
 
     # Clean text helper
     def clean_msg(txt, prefix):
-        # strip existing "1: " or "1.1: "
-        cleaned = re.sub(r'^\d+(\.\d+)?:\s*', '', txt).strip()
+        # strip existing "1: " or "1.1: " or "1.1a: " or "3b: "
+        cleaned = re.sub(r'^\d+(\.\d+)?[a-z]?:\s*', '', txt).strip()
         # limit length for visual elegance
         if len(cleaned) > 34:
             cleaned = cleaned[:32] + "..."
+        # Escape XML entities
+        cleaned = cleaned.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
         return f"{prefix} {cleaned}"
 
     msg_1_1 = clean_msg(a_to_iu[0]['txt'] if a_to_iu else "solicitar()", "1.1")
