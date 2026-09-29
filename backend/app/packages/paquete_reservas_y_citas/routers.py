@@ -200,21 +200,22 @@ def _build_reservation_response(res: Reservation, db: Session) -> ReservationRes
     )
 
 
-# [CU26 - Paso 1] (IU) El cliente selecciona prendas y horario de cita en IU_Reservas
+# [DSC026 - Mensaje 1] Cliente -> IU_Reserva: 1: solicitarReservaProbador(sucursal_id, fecha_cita, hora_cita, items, metodo_pago)
+# [DSC026 - Mensaje 2] IU_Reserva -> CTR_Reservas: 2: POST /api/v1/reservations (ReservationCreate)
 @router.post("", response_model=ReservationResponse, status_code=status.HTTP_201_CREATED)
-# [CU26 - Paso 2] / [DSC026 - Paso 2] +1. create_reservation(branch_id, items, appointment_date, time)
 def create_reservation(
     data: ReservationCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """[CU26] Agendar reserva física para probador con bloqueo de stock (HOLD 48h máx 5 prendas y seña 50%)."""
-    # 1. Validar sucursal
+    # [DSC026 - Mensaje 3] CTR_Reservas -> CE_Sucursal: 3: find_branch(branch_id)
     branch = db.query(Branch).filter(Branch.id == data.branch_id).first()
     if not branch or not branch.is_active:
         raise HTTPException(status_code=400, detail="Sucursal no válida o inactiva.")
+    # [DSC026 - Mensaje 4] CE_Sucursal -->> CTR_Reservas: 4: Branch(id, name, opening_time, closing_time)
 
-    # [CU26 - Paso 3] / [DSC026 - Paso 3] +2. validar_fecha_y_horario_atencion()
+    # [DSC026 - Mensaje 5] CTR_Reservas -> CTR_Reservas: 5: validar_fecha_horario_y_limite(fecha, hora, max_5_prendas)
     if data.appointment_date:
         today = date.today()
         if data.appointment_date < today:
@@ -228,7 +229,6 @@ def create_reservation(
             hour = int(parts[0])
             minute = int(parts[1]) if len(parts) > 1 else 0
             time_val = f"{hour:02d}:{minute:02d}"
-            # Comparar con horario de apertura y cierre de sucursal
             open_t = getattr(branch, "opening_time", "09:00") or "09:00"
             close_t = getattr(branch, "closing_time", "21:00") or "21:00"
             if time_val < open_t or time_val > close_t:
@@ -241,12 +241,11 @@ def create_reservation(
         except Exception:
             raise HTTPException(status_code=400, detail="Formato de hora de cita no válido. Use 'HH:MM'.")
 
-    # 2. Validar límite máximo de 5 prendas por reserva
     total_qty = sum(item.quantity for item in data.items)
     if total_qty > 5:
         raise HTTPException(status_code=400, detail="El límite por reserva es de hasta 5 prendas.")
 
-    # 3. Validar disponibilidad de stock en la sucursal seleccionada
+    # [DSC026 - Mensaje 6] [loop: Por cada prenda] CTR_Reservas -> CE_Inventario: 6: select_for_update(branch_id, variant_id)
     items_to_reserve = []
     for item_in in data.items:
         variant = db.query(ProductVariant).filter(ProductVariant.id == item_in.variant_id).first()
@@ -269,30 +268,31 @@ def create_reservation(
 
         prod = db.query(Product).filter(Product.id == variant.product_id).first()
         price = float(prod.base_price if prod else 0.0)
+        # [DSC026 - Mensaje 7] CE_Inventario -->> CTR_Reservas: 7: stock_disponible, base_price
         items_to_reserve.append((variant, inv, item_in.quantity, price, item_in.notes))
 
-    # 4. Calcular total de prendas y seña del 50%
+    # [DSC026 - Mensaje 8] CTR_Reservas -> CTR_Reservas: 8: calcularMontos(total, seña_50)
     total_amount = round(sum(price * qty for _, _, qty, price, _ in items_to_reserve), 2)
     deposit_amount = round(total_amount * 0.50, 2)
 
-    # 5. Generar código único de reserva (RES-XXXXXX)
     code = f"RES-{uuid.uuid4().hex[:6].upper()}"
     now = datetime.now()
     reserved_date = data.reserved_at if data.reserved_at else now
-    # Expiración por defecto: 48 horas desde la fecha de reserva
     expires_date = reserved_date + timedelta(hours=48)
 
     p_method = (data.payment_method or "TARJETA").upper()
     if p_method not in ("TARJETA", "PAYPAL", "QR"):
         p_method = "TARJETA"
     if p_method == "PAYPAL":
-        # La seña por PayPal se verifica con la pasarela antes de apartar las prendas.
         ref = data.payment_reference or ""
         if not ref.startswith("PAYPAL:"):
             raise HTTPException(status_code=400, detail="Falta la orden de PayPal de la seña.")
+        # [DSC026 - Mensaje 9a] [opt: PayPal] CTR_Reservas -> PAS_PayPal: 9a: verify_completed_order(paypal_order_id, seña_50)
         paypal_service.verify_completed_order(ref.split(":", 1)[1], deposit_amount)
+        # [DSC026 - Mensaje 9b] PAS_PayPal -->> CTR_Reservas: 9b: seña_verificada
     p_ref = data.payment_reference or f"{p_method}-TX-{uuid.uuid4().hex[:8].upper()}"
 
+    # [DSC026 - Mensaje 9] CTR_Reservas -> CE_Reserva: 9: insert_reservation(code="RES-XXXXXX", customer_id, branch_id, status="PENDING", total, seña_50, expires_at=now+48h)
     reservation = Reservation(
         reservation_code=code,
         customer_id=current_user.id,
@@ -312,13 +312,14 @@ def create_reservation(
     )
     db.add(reservation)
     db.flush()
+    # [DSC026 - Mensaje 10] CE_Reserva -->> CTR_Reservas: 10: reservation_id
 
-    # 5. Apartar stock (HOLD) e insertar items
     for variant, inv, qty, price, item_notes in items_to_reserve:
-        # [CU26 - Paso 4] / [DSC026 - Paso 4] +3. confirmar_reserva_y_bloquear_stock()
+        # [DSC026 - Mensaje 11] [loop: Por cada prenda] CTR_Reservas -> CE_Inventario: 11: deduct_stock(branch_id, variant_id, qty)
         inv.stock_actual -= qty
+        # [DSC026 - Mensaje 12] CE_Inventario -->> CTR_Reservas: 12: stock_apartado_HOLD
 
-        # Registrar movimiento en el libro mayor de inventario
+        # [DSC026 - Mensaje 13] CTR_Reservas -> CE_Kardex: 13: insert_ledger(tipo="RESERVA", cantidad=-qty, ref="RES-XXXXXX")
         db.add(
             InventoryLedger(
                 branch_id=data.branch_id,
@@ -329,7 +330,9 @@ def create_reservation(
                 reference_id=code,
             )
         )
+        # [DSC026 - Mensaje 14] CE_Kardex -->> CTR_Reservas: 14: asiento_registrado
 
+        # [DSC026 - Mensaje 15] CTR_Reservas -> CE_Reserva: 15: insert_reservation_item(reservation_id, variant_id, qty, unit_price)
         db.add(
             ReservationItem(
                 reservation_id=reservation.id,
@@ -340,13 +343,21 @@ def create_reservation(
             )
         )
 
+    # [DSC026 - Mensaje 16] CTR_Reservas -> CTR_Notificaciones: 16: notificar_cliente(customer_id, "Reserva registrada")
     _avisar_reserva(reservation, db, "PENDING")
+    # [DSC026 - Mensaje 17] CTR_Notificaciones -->> CTR_Reservas: 17: ok
+
+    # [DSC026 - Mensaje 18] CTR_Reservas -> CTR_Notificaciones: 18: notificar_personal_sucursal(branch_id, "Nueva reserva probador")
     _avisar_personal(
         reservation, db, "Nueva reserva de probador",
         f"{reservation.reservation_code}: {total_qty} prenda(s) para el {_texto_cita(reservation)}. Seña pagada: Bs. {deposit_amount:.2f} ({p_method}).",
     )
+    # [DSC026 - Mensaje 19] CTR_Notificaciones -->> CTR_Reservas: 19: ok
     db.commit()
     db.refresh(reservation)
+
+    # [DSC026 - Mensaje 20] CTR_Reservas -->> IU_Reserva: 20: HTTP 201 Created ReservationResponse(code, status="PENDING", total, seña_50, balance_due)
+    # [DSC026 - Mensaje 21] IU_Reserva -->> Cliente: 21: mostrarConfirmacionReserva(codigo, fecha_cita, saldo_restante)
     return _build_reservation_response(reservation, db)
 
 

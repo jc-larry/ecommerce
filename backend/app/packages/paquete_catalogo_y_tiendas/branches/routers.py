@@ -20,9 +20,9 @@ def list_branches(
     """[CU06] Lista todas las sucursales de la cadena (público para selección de retiro/pickup en ventas)"""
     return db.query(Branch).all()
 
-# [CU06 - Paso 1] (IU) El Superadministrador completa los datos de la sucursal en el panel administrativo
+# [DSC006 - Mensaje 1] Superadmin -> IU_Branches: 1: registrar(datos)
+# [DSC006 - Mensaje 2] IU_Branches -> CTR_Branches: 2: create_branch(datos)
 @router.post("", response_model=BranchResponse, status_code=201)
-# [CU06 - Paso 2] / [DSC006 - Paso 2] +1. create_branch(datos)
 def create_branch(
     branch_data: BranchCreate,
     request: Request,
@@ -37,25 +37,26 @@ def create_branch(
             detail="La plataforma FashionStore opera exclusivamente con sucursales físicas en Santa Cruz de la Sierra."
         )
 
-    # [CU06 - Paso 3] / [DSC006 - Paso 3] +2. check_exists(nombre)
+    # [DSC006 - Mensaje 3] CTR_Branches -> CE_Sucursal: 3: check_exists(nombre)
     existing = db.query(Branch).filter(Branch.name == branch_data.name).first()
     if existing:
-        # [CU06 - Paso 4a] / [DSC006 - Paso 4a] +2a. Existe (Error 400)
         raise HTTPException(status_code=400, detail="El nombre de la sucursal ya existe.")
         
+    # [DSC006 - Mensaje 4] CE_Sucursal -->> CTR_Branches: 4: No existe
     data_dict = branch_data.model_dump()
     data_dict["city"] = "Santa Cruz"
-    # [CU06 - Paso 4] / [DSC006 - Paso 4] +3. No existe: instanciar entidad
     branch = Branch(**data_dict)
-    # [CU06 - Paso 5] / [DSC006 - Paso 5] +4. insert_branch(datos)
+
+    # [DSC006 - Mensaje 5] CTR_Branches -> CE_Sucursal: 5: insert_branch(datos)
     db.add(branch)
-    # [CU06 - Paso 6] / [DSC006 - Paso 6] +5. Sucursal Creada (db.commit)
     db.commit()
     db.refresh(branch)
+    # [DSC006 - Mensaje 6] CE_Sucursal -->> CTR_Branches: 6: Sucursal Creada
 
     # Auditar creación de sucursal (CU36)
     log_event(db, current_user.id, "INSERT", "branches", branch.id, {"name": branch.name}, request.client.host)
-    # [CU06 - Paso 7] / [DSC006 - Paso 7] +6. HTTP 201 Created / Actualizar lista en UI
+    # [DSC006 - Mensaje 7] CTR_Branches -->> IU_Branches: 7: 201 Created
+    # [DSC006 - Mensaje 8] IU_Branches -->> Superadmin: 8: Actualizar lista en UI
     return branch
 
 @router.put("/{branch_id}", response_model=BranchResponse)

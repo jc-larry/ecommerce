@@ -510,69 +510,64 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor E as «actor»<br/>:EncargadoSucursal
-    participant IU as «boundary»<br/>IU_Ingreso : MerchandiseIntakeComponent
-    participant CTR as «control»<br/>CTR_Compras : MerchandiseRouter
-    participant CE_PRV as «entity»<br/>CE_Proveedor : SupplierModel
-    participant CE_CMP as «entity»<br/>CE_Compra : PurchaseOrderModel
-    participant CE_INV as «entity»<br/>CE_Inventario : InventoryModel
-    participant CE_KDX as «entity»<br/>CE_Kardex : InventoryLedgerModel
+    actor E as EncargadoSucursal
+    participant IU as IU_Ingreso
+    participant CTR as CTR_Compras
+    participant CE_PRV as CE_Proveedor
+    participant CE_CMP as CE_Compra
+    participant CE_INV as CE_Inventario
+    participant CE_KDX as CE_Kardex
 
-    E->>+IU: registrarLoteIngreso(proveedor_id: UUID, sucursal_id: UUID, nro_factura_prov: str, items: List[ItemCompraDTO])
-    
-    IU->>+CTR: POST /api/v1/inventory/merchandise-intakes (payload: IntakeRequestDTO)
-    
-    %% Validación de Proveedor
-    CTR->>+CE_PRV: find_by_id(proveedor_id)
-    alt [proveedor == null o proveedor.is_active == false]
-        CE_PRV-->>CTR: ProveedorInactivoException()
-        CTR-->>IU: 422 Unprocessable Entity: {error: "Proveedor no habilitado para emitir compras"}
-        IU-->>E: mostrarAlerta("Proveedor inactivo o inexistente")
-    else [proveedor activo]
-        CE_PRV-->>-CTR: Supplier(id=12, razon_social="Textiles Andinos S.A.")
+    E->>+IU: 1: registrarLoteIngreso(proveedor_id, sucursal_id, nro_factura, items)
+    IU->>+CTR: 2: POST /api/v1/merchandise/intake (PurchaseOrderCreate)
+
+    CTR->>+CE_PRV: 3: find_by_id(proveedor_id)
+    CE_PRV-->>-CTR: 4: Supplier(id=12, razon_social="Textiles Andinos S.A.")
+
+    CTR->>CTR: 5: prorratearCostoLanded(shipping_cost, raw_subtotal)
+
+    CTR->>+CE_CMP: 6: create_purchase_order(proveedor_id, sucursal_id, status='COMPLETADO', nro_factura, total)
+    CE_CMP-->>-CTR: 7: compra PurchaseOrder(id=140)
+
+    loop Por cada variante ingresada en el lote
+        CTR->>+CE_CMP: 8: add_item(compra_id=140, variante_id, cantidad, costo_unitario)
+        CE_CMP-->>-CTR: 9: ItemCompra(id=811)
+
+        CTR->>+CE_INV: 10: get_stock_and_cpp(sucursal_id, variante_id)
+        CE_INV-->>-CTR: 11: StockActual(stock_previo=20, cpp_previo=100.00)
+
+        CTR->>CTR: 12: calcularNuevoCPP(stock_prev, cpp_prev, cant_nueva, costo_landed) -> nuevo_cpp
+
+        CTR->>+CE_INV: 13: update_inventory(sucursal_id, variante_id, stock_adicional, nuevo_cpp)
+        CE_INV-->>-CTR: 14: Inventory(stock_total=30, cpp=110.00)
+
+        CTR->>+CE_KDX: 15: registrarMovimiento(tipo='INGRESO', ref="FACT-{nro_factura}", cantidad=+qty, costo_unit)
+        CE_KDX-->>-CTR: 16: AsientoKardex(id=9452)
     end
 
-    %% Cabecera de Compra
-    CTR->>+CE_CMP: create_purchase_order(proveedor_id=12, sucursal_id, nro_factura_prov, estado='RECIBIDO')
-    CE_CMP-->>-CTR: compra: PurchaseOrder(id=140)
-
-    %% Procesamiento de Cada Prenda
-    loop [Por cada variante ingresada en el lote]
-        CTR->>+CE_CMP: add_item(compra_id=140, variante_id, cantidad, costo_unitario)
-        CE_CMP-->>-CTR: ItemCompra(id=811)
-        
-        %% Lectura de Inventario Actual para CPP
-        CTR->>+CE_INV: get_stock_and_cpp(sucursal_id, variante_id)
-        CE_INV-->>-CTR: StockActual(stock_previo=20, cpp_previo=100.00)
-        
-        %% Recálculo Matemático de CPP
-        CTR->>CTR: calcularNuevoCPP(stock_previo=20, cpp_prev=100, cant_nueva=10, costo_nuevo=130) -> nuevo_cpp = 110.00
-        
-        %% Actualización de Inventario Físico y Valuación
-        CTR->>+CE_INV: update_inventory(sucursal_id, variante_id, stock_adicional=10, nuevo_cpp=110.00)
-        CE_INV-->>-CTR: Inventory(stock_total=30, cpp=110.00)
-        
-        %% Asiento Contable en Kardex
-        CTR->>+CE_KDX: registrarMovimiento(tipo='INGRESO_COMPRA', ref="CMP-140", cantidad=+10, costo_unit=130.00, saldo_resultante=30)
-        CE_KDX-->>-CTR: AsientoKardex(id=9452)
-    end
-
-    CTR-->>-IU: 201 Created: PurchaseSummaryDTO(compra_id=140, items_procesados=len(items), nuevo_valor_inventario)
-    IU-->>-E: renderizarComprobanteIngresoConKardexActualizado()
+    CTR-->>-IU: 17: HTTP 201 Created PurchaseOrderResponse(compra_id=140, status='COMPLETADO')
+    IU-->>-E: 18: renderizarComprobanteIngresoConKardexActualizado()
 ```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU10[Paso 1: El Encargado de Sucursal ingresa a la interfaz de recepción de mercadería y completa los datos del proveedor, número de factura y lista de prendas con cantidades y costos unitarios de adquisición.]`**
-- **`CU10[Paso 2: La interfaz despacha la solicitud HTTP POST /api/v1/inventory/merchandise-intakes con el DTO validado al controlador CTR_Compras.]`**
-- **`CU10[Paso 3: El controlador consulta en CE_Proveedor el estado y habilitación del proveedor; si está inactivo se aborta con error 422 Unprocessable Entity.]`**
-- **`CU10[Paso 4: Confirmado el proveedor, se persiste la cabecera de la orden de compra en CE_Compra con estado 'RECIBIDO'.]`**
-- **`CU10[Paso 5: [loop: Por cada variante] Se insertan las líneas de detalle de compra con cantidad y costo de adquisición.]`**
-- **`CU10[Paso 6: Se consulta el stock actual y costo promedio vigente en CE_Inventario para la variante y sucursal.]`**
-- **`CU10[Paso 7: El controlador ejecuta el recálculo financiero de Costo Promedio Ponderado (CPP) aplicando la fórmula contable oficial.]`**
-- **`CU10[Paso 8: Se actualizan las existencias físicas incrementadas y el nuevo CPP unitario en CE_Inventario.]`**
-- **`CU10[Paso 9: Se genera el asiento contable oficial en CE_Kardex con tipo 'INGRESO_COMPRA', costo unitario y saldo resultante valorizado.]`**
-- **`CU10[Paso 10: La interfaz recibe la confirmación con el código de compra y despliega el comprobante con existencias y CPP actualizado.]`**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — 18 Mensajes Canónicos):
+- **`CU10[Mensaje 1: El Encargado de Sucursal completa el formulario de recepción de mercadería con proveedor, factura y prendas.]`**
+- **`CU10[Mensaje 2: La interfaz despacha la solicitud HTTP POST /api/v1/merchandise/intake con el DTO PurchaseOrderCreate al controlador CTR_Compras.]`**
+- **`CU10[Mensaje 3: El controlador consulta la existencia del proveedor en CE_Proveedor.]`**
+- **`CU10[Mensaje 4: CE_Proveedor confirma la existencia y razón social del proveedor activo.]`**
+- **`CU10[Mensaje 5: El controlador calcula el factor de prorrateo de flete para determinar el costo unitario landed.]`**
+- **`CU10[Mensaje 6: El controlador persiste la cabecera de la orden de compra en CE_Compra con status 'COMPLETADO'.]`**
+- **`CU10[Mensaje 7: CE_Compra retorna la orden creada con su ID correlativo (id=140).]`**
+- **`CU10[Mensaje 8: [loop: Por cada variante] El controlador agrega la línea de detalle de compra con costo landed.]`**
+- **`CU10[Mensaje 9: CE_Compra retorna confirmación del ítem de detalle insertado.]`**
+- **`CU10[Mensaje 10: El controlador consulta las existencias previas y el costo promedio vigente en CE_Inventario.]`**
+- **`CU10[Mensaje 11: CE_Inventario retorna el stock previo y el CPP anterior.]`**
+- **`CU10[Mensaje 12: El controlador aplica la fórmula contable oficial para recalcular el nuevo Costo Promedio Ponderado (CPP).]`**
+- **`CU10[Mensaje 13: El controlador actualiza las existencias incrementadas y el nuevo CPP unitario en CE_Inventario.]`**
+- **`CU10[Mensaje 14: CE_Inventario confirma la actualización física y valorizada del stock.]`**
+- **`CU10[Mensaje 15: El controlador asienta el movimiento de entrada en el libro mayor CE_Kardex con tipo 'INGRESO' y costo landed.]`**
+- **`CU10[Mensaje 16: CE_Kardex retorna el ID del asiento contable inmutable registrado.]`**
+- **`CU10[Mensaje 17: El controlador responde HTTP 201 Created PurchaseOrderResponse a la interfaz.]`**
+- **`CU10[Mensaje 18: La interfaz renderiza el comprobante de ingreso formal con el stock y CPP actualizados.]`**
 
 ---
 
@@ -862,19 +857,35 @@ sequenceDiagram
     end
 ```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU15[Paso 1: [Fase Solicitud] El Encargado de la Sucursal de Origen crea una solicitud de traspaso indicando la sucursal de origen, la de destino y la lista de prendas con sus cantidades requeridas.]`**
-- **`CU15[Paso 1.1: La interfaz envía la solicitud al controlador (POST /api/v1/merchandise/transfers).]`**
-- **`CU15[Paso 1.2: El controlador verifica la disponibilidad física de stock en la sucursal de origen (CE_Inventario_Sucursal).]`**
-- **`CU15[Paso 1.3: Se crea el registro del traspaso con estado inicial 'SOLICITADA' y código correlativo TRF-AAAA-XXXXXX en CE_Traspaso_Mercaderia.]`**
-- **`CU15[Paso 2: [Fase Despacho] El Encargado de Origen embala las prendas y presiona 'Despachar Mercadería'.]`**
-- **`CU15[Paso 2.1: El controlador actualiza el estado del traspaso a 'EN_TRANSITO' (PUT /api/v1/merchandise/transfers/{id}/status).]`**
-- **`CU15[Paso 2.2: Se descuentan las existencias físicas del almacén de origen en CE_Inventario_Sucursal.]`**
-- **`CU15[Paso 2.3: Se registra el asiento contable de salida 'TRANSFERENCIA_SALIDA' en el Kardex (CE_Kardex_Movimientos).]`**
-- **`CU15[Paso 3: [Fase Recepción] El Encargado de Destino recibe el paquete físico, verifica las prendas y pulsa 'Confirmar Recepción'.]`**
-- **`CU15[Paso 3.1: La interfaz despacha la confirmación de recepción (PUT /api/v1/merchandise/transfers/{id}/receive).]`**
-- **`CU15[Paso 3.2: Se incrementa el stock físico de las variantes en la sucursal de destino en CE_Inventario_Sucursal.]`**
-- **`CU15[Paso 3.3: Se asienta el ingreso 'TRANSFERENCIA_INGRESO' en CE_Kardex_Movimientos y el traspaso pasa a estado definitivo 'COMPLETADA'.]`**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — 28 Mensajes Canónicos):
+- **`CU15[Paso 1: [Fase 1: Solicitud] El Encargado de Sucursal Origen solicita el traspaso ingresando sucursal origen, destino, lista de prendas y cantidades.]`**
+- **`CU15[Paso 2: La Interfaz_Gestion_Inventario despacha la petición al controlador (POST /api/v1/merchandise/transfers).]`**
+- **`CU15[Paso 3: El Controlador_Traspasos_Inventario consulta la disponibilidad a Entidad_Inventario_Sucursal (verificarStockDisponible).]`**
+- **`CU15[Paso 4: Entidad_Inventario_Sucursal confirma la disponibilidad suficiente de existencias al controlador.]`**
+- **`CU15[Paso 5: El controlador invoca a Entidad_Traspaso_Mercaderia para registrar el traspaso con estado 'SOLICITADA' y código TRF-AAAA-XXXXXX.]`**
+- **`CU15[Paso 6: Entidad_Traspaso_Mercaderia persiste el registro y retorna el identificador correlativo (traspaso_id = 101).]`**
+- **`CU15[Paso 7: El controlador responde a la interfaz confirmando el registro del traspaso con su ID.]`**
+- **`CU15[Paso 8: La interfaz notifica al Encargado de Origen que la solicitud de traspaso fue registrada exitosamente.]`**
+- **`CU15[Paso 9: [Fase 2: Despacho en Origen] El Encargado de Sucursal Origen embala las prendas y pulsa 'Despachar Mercadería'.]`**
+- **`CU15[Paso 10: La Interfaz_Gestion_Inventario solicita la salida física de mercadería al controlador (PUT /transfers/{id}/status con EN_TRANSITO).]`**
+- **`CU15[Paso 11: El controlador ordena a Entidad_Inventario_Sucursal restar el stock físico en la sucursal de origen.]`**
+- **`CU15[Paso 12: Entidad_Inventario_Sucursal descuenta las existencias y confirma stock_origen_descontado.]`**
+- **`CU15[Paso 13: El controlador asienta el movimiento contable de salida en Entidad_Kardex_Movimientos (tipo='TRANSFERENCIA_SALIDA', ref='TRF-101').]`**
+- **`CU15[Paso 14: Entidad_Kardex_Movimientos confirma el asiento contable de salida registrado.]`**
+- **`CU15[Paso 15: El controlador actualiza el estado en Entidad_Traspaso_Mercaderia a 'EN_TRANSITO'.]`**
+- **`CU15[Paso 16: Entidad_Traspaso_Mercaderia confirma el cambio de estado.]`**
+- **`CU15[Paso 17: El controlador emite la confirmación de despacho exitoso a la interfaz.]`**
+- **`CU15[Paso 18: La interfaz notifica al Encargado de Origen que la mercadería está en camino a la sucursal destino.]`**
+- **`CU15[Paso 19: [Fase 3: Recepción en Destino] El Encargado de Sucursal Destino recibe el paquete físico y pulsa 'Confirmar Recepción'.]`**
+- **`CU15[Paso 20: La Interfaz_Gestion_Inventario despacha el ingreso de mercadería al controlador (PUT /transfers/{id}/status con COMPLETADA).]`**
+- **`CU15[Paso 21: El controlador ordena a Entidad_Inventario_Sucursal sumar el stock físico en la sucursal destino.]`**
+- **`CU15[Paso 22: Entidad_Inventario_Sucursal incrementa las existencias y actualiza el costo promedio ponderado.]`**
+- **`CU15[Paso 23: El controlador asienta el movimiento contable de ingreso en Entidad_Kardex_Movimientos (tipo='TRANSFERENCIA_ENTRADA', ref='TRF-101').]`**
+- **`CU15[Paso 24: Entidad_Kardex_Movimientos confirma el asiento contable de ingreso registrado.]`**
+- **`CU15[Paso 25: El controlador actualiza el estado en Entidad_Traspaso_Mercaderia a 'COMPLETADA' y fija la fecha de finalización.]`**
+- **`CU15[Paso 26: Entidad_Traspaso_Mercaderia confirma que el traspaso fue finalizado satisfactoriamente.]`**
+- **`CU15[Paso 27: El controlador emite la confirmación de recepción física a la interfaz.]`**
+- **`CU15[Paso 28: La interfaz notifica al Encargado de Sucursal Destino que las prendas fueron incorporadas al inventario de la sucursal.]`**
 
 ---
 ### CU16: Configurar y notificar alertas de stock (mínimo/máximo)
@@ -1011,101 +1022,97 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor C as «actor»<br/>:Cliente
-    participant IU as «boundary»<br/>IU_Checkout : CartModalComponent
-    participant CTR as «control»<br/>CTR_Ventas : SalesService
-    participant PAS as «external»<br/>PAS_PayPal : PayPalGateway
-    participant CE_I as «entity»<br/>CE_Inventario : InventoryModel
-    participant CE_O as «entity»<br/>CE_Orden : SaleOrderModel
-    participant CTR_F as «control»<br/>CTR_Fact : InvoiceService
-    participant CE_F as «entity»<br/>CE_Factura : InvoiceModel
-    participant CE_NC as «entity»<br/>CE_NotaCredito : CreditNoteModel
-    participant NOTIF as «control»<br/>CTR_Notif : PushNotificationService
+    actor C as Cliente
+    participant IU as IU_Checkout
+    participant CTR as CTR_Ventas
+    participant CE_C as CE_Carrito
+    participant CE_I as CE_Inventario
+    participant CE_CUP as CE_Cupon
+    participant CE_O as CE_Orden
+    participant CE_K as CE_Kardex
+    participant CE_P as CE_Pago
+    participant PAS as PAS_PayPal
+    participant CE_F as CE_Factura
+    participant NOTIF as CTR_Notificaciones
+    participant CE_ENV as CE_Envio
 
-    C->>+IU: confirmarCheckout(modalidad: EnumModalidad, sucursal_id: UUID, nit_ci: str, medio_pago: EnumPago)
-    
-    alt [modalidad == RETIRO_SUCURSAL]
-        IU->>IU: setParametrosEntrega(costo_envio: 0.00, custodia_limite_horas: 48)
-    else [modalidad == DELIVERY_DOMICILIO]
-        IU->>IU: calcularTarifaEnvio(coordenadas_gps: LatLng): Decimal(15.00)
+    C->>+IU: 1: iniciarCheckout(sucursal_id, delivery_type, medio_pago, nit_ci, coupon_code)
+    IU->>+CTR: 2: POST /api/v1/sales/checkout (CheckoutRequest)
+
+    CTR->>+CE_C: 3: get_cart_items(user_id)
+    CE_C-->>-CTR: 4: cart_items[(variant_id, qty)]
+
+    loop Por cada variante del carrito
+        CTR->>+CE_I: 5: select_for_update(branch_id, variant_id)
+        CE_I-->>-CTR: 6: stock_ok, unit_price
     end
 
-    IU->>+CTR: POST /api/v1/sales/checkout-session (payload: CheckoutSessionDTO)
-    
-    %% Validación y Bloqueo de Stock
-    CTR->>+CE_I: select_for_update_stock(sucursal_id, variantes_ids, cantidades)
-    alt [stock_disponible < cantidad_solicitada]
-        CE_I-->>CTR: StockInsuficienteException(variante_id)
-        CTR-->>IU: 409 Conflict: {error: "Stock agotado en sucursal"}
-        IU-->>C: renderizarAlertaStockAgotado()
-    else [stock_disponible >= cantidad_solicitada]
-        CE_I-->>-CTR: stock_bloqueado_ok: bool
-        CTR->>+CE_O: create(estado='PENDIENTE_PAGO', timeout_segundos=300, modalidad=modalidad)
-        CE_O-->>-CTR: orden_instancia: SaleOrder(id=450, expires_at=now+5min)
-        CTR-->>-IU: 201 Created: SesionCheckoutDTO(orden_id=450, token_expiracion=300s)
+    opt coupon_code presente
+        CTR->>+CE_CUP: 7: validar_cupon(code, min_purchase)
+        CE_CUP-->>-CTR: 8: discount_amount
     end
 
-    %% Bifurcación de Tiempo: Timeout Pasarela vs Pago Exitoso
-    alt [Flujo Excepcional: Timeout de Pasarela > 300 segundos]
-        IU->>+CTR: POST /api/v1/sales/timeout-abort (orden_id=450)
-        CTR->>+CE_I: revertirBloqueoTemporal(sucursal_id, items)
-        CE_I-->>-CTR: stock_restaurado: bool
-        CTR->>+CE_O: update_estado(orden_id=450, nuevo_estado='CANCELADA_TIMEOUT')
-        CE_O-->>-CTR: void
-        CTR->>+NOTIF: enviarPush(cliente_id, "Sesión de pago expirada. Prendas liberadas sin cobro.")
-        NOTIF-->>-CTR: ack_push
-        CTR-->>-IU: 200 OK: {estado: "SESION_EXPIRADA"}
-        IU-->>C: mostrarModalReintento(tiempo_agotado=true)
+    CTR->>+CE_O: 9: insert_order(user_id, branch_id, channel="ONLINE", status="PAGADA", total, delivery_type, pickup_deadline)
+    CE_O-->>-CTR: 10: order_id
 
-    else [Flujo Normal: Pago Confirmado dentro del límite de 5 minutos]
-        IU->>+PAS: createAndCaptureOrder(monto_total: Decimal, moneda: "BOB", auth_token: str)
-        PAS-->>-IU: PaymentCaptureResponse(id="PAY-88219", status="COMPLETED")
-        
-        IU->>+CTR: POST /api/v1/sales/confirm-payment (orden_id=450, transaccion_id="PAY-88219")
-        CTR->>+CE_I: descontarStockFisicoDefinitivo(sucursal_id, items)
-        CE_I-->>-CTR: stock_descontado: bool
-        CTR->>+CE_O: update(estado='PAGADA', id_transaccion="PAY-88219")
-        CE_O-->>-CTR: orden_actualizada
-        
-        %% Facturación Automática (Ley 843 IVA 13% Bolivia)
-        CTR->>+CTR_F: emitirFacturaComputarizada(orden_id=450, nit_ci, total_bob, tasa_iva=0.13)
-        CTR_F->>+CE_F: insert(num_factura, codigo_control, qr_sin, autorizacion_sin)
-        CE_F-->>-CTR_F: factura_persisitida: Invoice(id=310)
-        CTR_F-->>-CTR: FacturaDTO(id=310, url_pdf="/invoices/310.pdf")
-
-        alt [modalidad == RETIRO_SUCURSAL]
-            CTR->>CE_O: setPlazoCustodia(pickup_deadline = now + 48h, estado='LISTO_RETIRO')
-            CTR->>NOTIF: despacharAlertaPickup(cliente_id, "Prendas listas en sucursal. Plazo máximo: 48 horas")
-            
-            opt [Job Cron: Cliente no recoge en 48 Horas]
-                CTR->>+CE_I: reingresarStockExhibicion(sucursal_id, items)
-                CE_I-->>-CTR: existencias_repuestas
-                CTR->>+CE_NC: emitirNotaCredito(cliente_id, monto_total, motivo='ABANDONO_PEDIDO_48H')
-                CE_NC-->>-CTR: NotaCredito(codigo="NC-2026-9812")
-                CTR->>NOTIF: notificarNotaCreditoGenerada(cliente_id, "Plazo de 48h vencido. Se emitió NC por el monto pagado.")
-            end
-        else [modalidad == DELIVERY_DOMICILIO]
-            CTR->>CE_O: generarHojaRutaDespacho(direccion, tarifa_envio, estado='PREPARANDO_DESPACHO')
-        end
-
-        CTR-->>-IU: 200 OK: CheckoutCompleteDTO(orden_id=450, factura_id=310)
-        IU-->>-C: renderizarComprobanteConDescargaPDF()
+    loop Por cada variante
+        CTR->>+CE_I: 11: deduct_stock(branch_id, variant_id, qty)
+        CE_I-->>-CTR: 12: stock_descontado
+        CTR->>+CE_K: 13: insert_ledger(tipo="VENTA", cantidad=-qty, ref="ORD-id")
+        CE_K-->>-CTR: 14: asiento_registrado
     end
+
+    opt medio_pago == PAYPAL
+        CTR->>+PAS: 15a: verify_completed_order(paypal_order_id, total)
+        PAS-->>-CTR: 15b: pago_verificado
+    end
+
+    CTR->>+CE_P: 15: insert_payment(order_id, metodo_pago, monto, status="CONFIRMADO")
+    CE_P-->>-CTR: 16: payment_id
+
+    CTR->>+CE_F: 17: insert_invoice(order_id, doc_type, subtotal, iva_13, control_code)
+    CE_F-->>-CTR: 18: invoice_id
+
+    CTR->>CE_C: 19: clear_cart_items(user_id)
+    CTR->>+NOTIF: 20: notificar(user_id, "Compra confirmada", order_id)
+    NOTIF-->>-CTR: 21: notificacion_enviada
+
+    opt delivery_type == ENVIO_DOMICILIO
+        CTR->>+CE_ENV: 22: insert_shipment(order_id, tracking_number, status="PENDING_DISPATCH")
+        CE_ENV-->>-CTR: 23: shipment_id
+    end
+
+    CTR-->>-IU: 24: HTTP 201 Created OrderResponse(order_id, invoice, delivery_type, pickup_deadline)
+    IU-->>-C: 25: renderizarConfirmacionPedido()
 ```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU18[Paso 1: El cliente accede al Checkout desde el carrito de compras y define los datos de su pedido: modalidad de entrega obligatoria (Retiro en Tienda Física con 48h de custodia vs. Envío por Delivery), sucursal, datos de facturación NIT/CI y medio de pago.]`**
-- **`CU18[Paso 1.1: [alt: Modalidad Retiro en Tienda] Si selecciona retiro en sucursal física, el costo de envío es Bs. 0.00 y se fija un plazo improrrogable de 48 horas para recoger las prendas. [alt: Modalidad Delivery] Si solicita delivery, se ingresa la dirección y se calcula la tarifa según coordenadas GPS y zona geográfica.]`**
-- **`CU18[Paso 2: La interfaz envía la solicitud HTTP POST /api/v1/sales/checkout-session con el DTO validado al controlador CTR_Ventas.]`**
-- **`CU18[Paso 3: El controlador bloquea temporalmente las existencias en CE_Inventario mediante SELECT FOR UPDATE y fija un temporizador estricto de 5 minutos (300 segundos) para la sesión de pago.]`**
-- **`CU18[Paso 4: [alt: Expiración por Timeout de 5 Minutos] Si el cliente no completa el pago en la pasarela dentro de los 300 segundos, la orden pasa a 'CANCELADA_TIMEOUT', el stock bloqueado se libera de inmediato devolviendo la disponibilidad de la prenda a la tienda, y el sistema despacha una notificación push urgente informando que el tiempo expiró y no se le cobró nada.]`**
-- **`CU18[Paso 5: [alt: Pago Exitoso en Tiempo Límite] La Pasarela de Pagos (PayPal) procesa el cobro satisfactoriamente y devuelve la confirmación con el identificador de captura antes de los 5 minutos.]`**
-- **`CU18[Paso 6: Se descuenta definitivamente el stock físico en CE_Inventario, registrando el asiento de salida en el Kardex/LibroMayor.]`**
-- **`CU18[Paso 7: Se registra la orden en estado 'PAGADA' y se asocian las referencias de transacción bancaria.]`**
-- **`CU18[Paso 8: Se invoca al controlador fiscal CTR_Facturacion emitiendo la Factura Oficial computarizada con IVA 13%, código de control y QR tributario en CE_Factura_Fiscal.]`**
-- **`CU18[Paso 9: [alt: Si es Retiro en Tienda] Se programa la orden en estado 'LISTO_RETIRO' con fecha límite de 48 horas. Si transcurren las 48 horas sin ser retirada, el stock retorna a exhibición en la sucursal y el sistema emite automáticamente una Nota de Crédito en CE_NotaCredito para su próxima compra sin acumular bultos en tienda.]`**
-- **`CU18[Paso 10: [alt: Si es Delivery] Se genera la hoja de ruta de despacho y rastreo en CE_Envio asignando repartidor.]`**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — 25 Mensajes Canónicos):
+- **`CU18[Mensaje 1: El cliente accede al Checkout desde el carrito e indica sucursal, entrega (Retiro 48h o Delivery), NIT/CI, cupón y medio de pago.]`**
+- **`CU18[Mensaje 2: La interfaz envía la solicitud HTTP POST /api/v1/sales/checkout con el DTO CheckoutRequest al controlador CTR_Ventas.]`**
+- **`CU18[Mensaje 3: El controlador solicita los ítems vigentes del carrito en CE_Carrito.]`**
+- **`CU18[Mensaje 4: CE_Carrito retorna la lista de variantes y cantidades solicitadas.]`**
+- **`CU18[Mensaje 5: [loop: Por cada variante] El controlador realiza SELECT FOR UPDATE en CE_Inventario para bloqueo pesimista de stock.]`**
+- **`CU18[Mensaje 6: CE_Inventario retorna confirmación de existencias suficientes y precio unitario efectivo.]`**
+- **`CU18[Mensaje 7: [opt: Cupón] Si se ingresó coupon_code, se consulta vigencia y condiciones en CE_Cupon.]`**
+- **`CU18[Mensaje 8: CE_Cupon retorna el monto exacto de descuento aplicable.]`**
+- **`CU18[Mensaje 9: El controlador persiste la orden en CE_Orden con estado 'PAGADA', tipo de entrega y vencimiento de custodia/pago.]`**
+- **`CU18[Mensaje 10: CE_Orden retorna el identificador único de la orden creada (order_id).]`**
+- **`CU18[Mensaje 11: [loop: Por cada variante] El controlador descuenta el stock físico en CE_Inventario.]`**
+- **`CU18[Mensaje 12: CE_Inventario confirma el descuento de existencias.]`**
+- **`CU18[Mensaje 13: El controlador asienta la salida en el libro mayor CE_Kardex con tipo 'VENTA' y referencia 'ORD-{id}'.]`**
+- **`CU18[Mensaje 14: CE_Kardex confirma el asiento contable registrado.]`**
+- **`CU18[Mensaje 15a/15b: [opt: PayPal] El controlador verifica la transacción completada contra la pasarela PAS_PayPal.]`**
+- **`CU18[Mensaje 15: El controlador registra el pago polimórfico en CE_Pago con estado 'CONFIRMADO'.]`**
+- **`CU18[Mensaje 16: CE_Pago retorna el payment_id generado.]`**
+- **`CU18[Mensaje 17: El controlador emite la factura tributaria en CE_Factura con IVA 13% y código de control.]`**
+- **`CU18[Mensaje 18: CE_Factura retorna el invoice_id generado.]`**
+- **`CU18[Mensaje 19: El controlador vacía los ítems del carrito en CE_Carrito.]`**
+- **`CU18[Mensaje 20: El controlador despacha la notificación push de confirmación en CTR_Notificaciones.]`**
+- **`CU18[Mensaje 21: CTR_Notificaciones confirma el envío de la notificación.]`**
+- **`CU18[Mensaje 22: [opt: Delivery] El controlador crea la hoja de ruta y tracking en CE_Envio.]`**
+- **`CU18[Mensaje 23: CE_Envio retorna el shipment_id generado.]`**
+- **`CU18[Mensaje 24: El controlador responde HTTP 201 Created OrderResponse con orden, factura y entrega a IU_Checkout.]`**
+- **`CU18[Mensaje 25: La interfaz renderiza en pantalla la confirmación del pedido y el comprobante digital.]`**
 
 ---
 
@@ -1138,82 +1145,71 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor Cajero as «actor»<br/>:Cajero
-    participant IU as «boundary»<br/>IU_POS : PosComponent
-    participant CTR as «control»<br/>CTR_POS : PosService
-    participant SC as «entity»<br/>CE_SesionCaja : CashShiftModel
-    participant INV as «entity»<br/>CE_Inventario : InventoryModel
-    participant ORD as «entity»<br/>CE_Orden : OrderModel
-    participant MP as «entity»<br/>CE_Pago : PaymentModel
-    participant FAC_CTR as «control»<br/>CTR_Facturacion : InvoiceService
-    participant FAC as «entity»<br/>CE_Factura : InvoiceModel
-    participant PRN as «external»<br/>EXT_Impresora : EscPosPrinterDriver
+    actor Cajero as Cajero
+    participant IU as IU_POS
+    participant CTR as CTR_POS
+    participant SC as CE_SesionCaja
+    participant INV as CE_Inventario
+    participant ORD as CE_Orden
+    participant MP as CE_Pago
+    participant FAC as CE_Factura
 
-    Cajero->>+IU: ingresarVentaDirecta(sesion_id: int, items: List[ItemPOSDTO], efectivo_recibido: Decimal, nit_ci: str, razon_social: str)
-    
-    IU->>+CTR: POST /api/v1/pos/orders (payload: PosCheckoutDTO)
-    
-    %% Validación de Caja
-    CTR->>+SC: get_active_shift(sesion_id)
-    alt [sesion.estado != 'ABIERTA' o sesion.cajero_id != usuario_autenticado]
-        SC-->>CTR: TurnoInvalidoException("Caja cerrada o no autorizada")
-        CTR-->>IU: 403 Forbidden: {error: "Debe realizar apertura de caja"}
-        IU-->>Cajero: bloquearTerminal("Abra turno antes de cobrar")
-    else [sesion.estado == 'ABIERTA']
-        SC-->>-CTR: shift: CashShift(id=45, estado='ABIERTA')
+    Cajero->>+IU: 1: ingresarVentaDirecta(sesion_id, items, efectivo_recibido, nit_ci)
+    IU->>+CTR: 2: POST /api/v1/pos/orders (PosCheckoutDTO)
+
+    CTR->>+SC: 3: get_active_shift(sesion_id)
+    SC-->>-CTR: 4: shift CashShift(id=45, estado=ABIERTA)
+
+    loop Por cada variante escaneada
+        CTR->>+INV: 5: select_for_update(branch_id, variant_id)
+        INV-->>-CTR: 6: stock_disponible, unit_price
     end
 
-    %% Validación de Importe Recibido
-    alt [efectivo_recibido < total_a_pagar]
-        CTR-->>IU: 400 Bad Request: {error: "Monto recibido insuficiente"}
-        IU-->>Cajero: indicarDiferenciaFaltante(faltante: total - recibido)
-    else [efectivo_recibido >= total_a_pagar]
-        
-        rect rgb(240, 249, 255)
-            note over CTR, FAC: Transacción Atómica ACID (PostgreSQL BEGIN ... COMMIT)
-            
-            %% Registro de Orden
-            CTR->>+ORD: create_pos_order(sucursal_id=1, canal='POS', total=200.00, estado='COMPLETADO')
-            ORD-->>-CTR: orden: Order(id=880)
+    rect rgb(240, 249, 255)
+        note over CTR, FAC: Transacción Atómica ACID (PostgreSQL BEGIN ... COMMIT)
 
-            %% Descuento de Existencias
-            loop [Por cada variante escaneada]
-                CTR->>+INV: deduct_stock_pos(sucursal_id=1, variante_id, cantidad, motivo='VENTA_POS')
-                INV-->>-CTR: stock_actualizado: bool
-            end
+        CTR->>+ORD: 7: insert_order(sucursal_id, canal=POS, total, estado=COMPLETADO)
+        ORD-->>-CTR: 8: orden Order(id=880)
 
-            %% Registro de Pago y Vuelto
-            CTR->>CTR: calcularCambio(recibido=250.00, total=200.00) -> vuelto = Bs. 50.00
-            CTR->>+MP: insert(orden_id=880, metodo='EFECTIVO', monto=200.00, recibido=250.00, cambio=50.00)
-            MP-->>-CTR: pago_id = 912
-
-            %% Facturación Fiscal
-            CTR->>+FAC_CTR: emitirFacturaFiscal(orden_id=880, nit_ci, total=200.00, iva_13=26.00)
-            FAC_CTR->>+FAC: insert(orden_id=880, num_factura=1049, codigo_control="6B-A1-2C", qr="https://impuestos.gob.bo/...")
-            FAC-->>-FAC_CTR: factura: Invoice(id=512)
-            FAC_CTR-->>-CTR: FacturaFiscalDTO(id=512, codigo_control="6B-A1-2C")
+        loop Por cada variante escaneada
+            CTR->>+INV: 9: deduct_stock(sucursal_id, variante_id, cantidad)
+            INV-->>-CTR: 10: stock_descontado
+            CTR->>+INV: 11: insert_ledger(tipo=VENTA, cantidad=-N, ref=ORD-880)
+            INV-->>-CTR: 12: asiento_kardex_registrado
         end
 
-        %% Disparo de Hardware Físico
-        CTR->>+PRN: printEscPosReceipt(raw_bytes: ESC_POS_STREAM, cortar_papel=true, abrir_gaveta=true)
-        PRN-->>-CTR: HardwareStatus(status="SUCCESS", drawer_opened=true)
+        CTR->>CTR: 13: calcularCambio(recibido=250.00, total=200.00) -> vuelto=50.00
+        CTR->>+MP: 14: insert_payment(orden_id=880, metodo=EFECTIVO, monto=200.00, recibido=250.00, cambio=50.00)
+        MP-->>-CTR: 15: pago_id = 741
 
-        CTR-->>-IU: 201 Created: PosSaleResultDTO(orden_id=880, factura_id=512, cambio=50.00)
-        IU-->>-Cajero: mostrarResumenVuelto(vuelto=50.00, ticket_impreso=true)
+        CTR->>+FAC: 16: insert_invoice(orden_id=880, doc_type=FACTURA, nit_ci, total=200.00, iva_13=26.00)
+        FAC-->>-CTR: 17: factura Invoice(id=512, codigo_control)
     end
+
+    CTR-->>-IU: 18: HTTP 201 Created OrderResponse(orden_id=880, factura_id=512, cambio=50.00)
+    IU-->>-Cajero: 19: mostrarResumenVuelto(vuelto=50.00)
 ```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU19[Paso 1: El cajero ingresa al terminal de punto de venta los ítems escaneados, el total a pagar (Bs. 200.00), el efectivo recibido (Bs. 250.00) y los datos fiscales (NIT/CI).]`**
-- **`CU19[Paso 2: La interfaz envía la solicitud HTTP POST /api/v1/pos/orders con el DTO validado al controlador CTR_POS adjuntando el session_id de la caja activa.]`**
-- **`CU19[Paso 3: El controlador consulta CE_SesionCaja verificando que el turno se encuentre con session_status = 'ABIERTA'; si no lo está, rechaza la operación con error 403 Forbidden.]`**
-- **`CU19[Paso 4: [Transacción ACID] Se crea el registro de la venta en CE_Orden con canal='POS' y estado='COMPLETADO'.]`**
-- **`CU19[Paso 5: [loop: Por cada variante] Se descuenta el stock físico en CE_Inventario y se registra el egreso en el Kardex.]`**
-- **`CU19[Paso 6: Se calcula el vuelto exacto (Bs. 50.00) y se persiste el pago en efectivo en CE_Pago vinculando recibido y cambio.]`**
-- **`CU19[Paso 7: Se delega a CTR_Facturacion la emisión de la factura computarizada oficial con IVA 13% y código de control en CE_Factura.]`**
-- **`CU19[Paso 8: Se despacha la trama binaria ESC/POS a EXT_Impresora para imprimir el ticket de 80mm y enviar el pulso de apertura de la gaveta de dinero.]`**
-- **`CU19[Paso 9: La interfaz recibe la confirmación exitosa y despliega el monto de vuelto que el cajero debe entregar al cliente.]`**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — 19 Mensajes Canónicos):
+- **`CU19[Mensaje 1: El cajero ingresa al terminal de punto de venta los ítems escaneados, el total a pagar, el efectivo recibido y los datos fiscales (NIT/CI).]`**
+- **`CU19[Mensaje 2: La interfaz envía la solicitud HTTP POST /api/v1/pos/orders con el DTO validado al controlador CTR_POS adjuntando el session_id de la caja activa.]`**
+- **`CU19[Mensaje 3: El controlador consulta CE_SesionCaja verificando que el turno se encuentre con status 'ABIERTA' y pertenezca al cajero autenticado.]`**
+- **`CU19[Mensaje 4: CE_SesionCaja retorna el turno activo confirmando la autorización de cobro.]`**
+- **`CU19[Mensaje 5: [loop: Por cada variante] El controlador solicita bloqueo pesimista en CE_Inventario mediante SELECT FOR UPDATE.]`**
+- **`CU19[Mensaje 6: CE_Inventario confirma existencia física suficiente y retorna el precio unitario vigente.]`**
+- **`CU19[Mensaje 7: [Transacción ACID] El controlador inserta la cabecera de la orden con canal='POS' y estado='COMPLETADO' en CE_Orden.]`**
+- **`CU19[Mensaje 8: CE_Orden retorna la orden persistida con su ID generado (id=880).]`**
+- **`CU19[Mensaje 9: [loop: Por cada variante] El controlador descuenta el stock físico en CE_Inventario.]`**
+- **`CU19[Mensaje 10: CE_Inventario confirma el descuento de existencias.]`**
+- **`CU19[Mensaje 11: El controlador asienta el movimiento contable de salida en el Kárdex (CE_Inventario) con tipo 'VENTA' y referencia 'ORD-880'.]`**
+- **`CU19[Mensaje 12: CE_Inventario retorna confirmación del asiento de Kárdex registrado.]`**
+- **`CU19[Mensaje 13: El controlador ejecuta el cálculo matemático del vuelto exacto (efectivo_recibido - total).]`**
+- **`CU19[Mensaje 14: El controlador persiste el registro del pago en efectivo en CE_Pago vinculando recibido y cambio.]`**
+- **`CU19[Mensaje 15: CE_Pago retorna confirmación del pago registrado (pago_id=741).]`**
+- **`CU19[Mensaje 16: El controlador emite la factura computarizada oficial en CE_Factura con IVA 13% y código de control v7.]`**
+- **`CU19[Mensaje 17: CE_Factura retorna el comprobante tributario generado (id=512).]`**
+- **`CU19[Mensaje 18: El controlador responde a la interfaz con HTTP 201 Created OrderResponse con orden_id, factura_id y vuelto.]`**
+- **`CU19[Mensaje 19: La interfaz despliega al cajero el resumen de la venta y el monto exacto del vuelto a entregar.]`**
 
 ---
 
@@ -1346,7 +1342,7 @@ sequenceDiagram
 - **Frontend Web Component:** [rontend-web/src/app/packages/paquete_ventas_y_pagos/returns/returns-management.component.ts](file:///frontend-web/src/app/packages/paquete_ventas_y_pagos/returns/returns-management.component.ts)
 
 #### Diagrama de Secuencia (Mermaid):
-`mermaid
+```mermaid
 sequenceDiagram
     actor C as Cajero_Encargado
     participant IU as IU_Gestion_Devoluciones
@@ -1416,18 +1412,45 @@ sequenceDiagram
             IU-->>-C: 14d: comprobanteFinalizado()
         end
     end
-`
+```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **CU22[Paso 1: El cajero o encargado de sucursal ingresa el código o número correlativo de la Factura de compra oficial (ej. 'FAC-10024' o código de control) en la interfaz de gestión de devoluciones.]**
-- **CU22[Paso 1.1: La interfaz despacha la consulta de la factura al controlador (GET /api/v1/sales/invoices/by-code/{invoice_code}).]**
-- **CU22[Paso 1.2: El controlador recupera los datos de la venta y calcula los días transcurridos desde la fecha de compra: delta_dias = HOY - fecha_compra.]**
-- **CU22[Paso 1.3: [alt: Plazo Vencido] Si delta_dias > 14 días (2 semanas), el controlador bloquea de forma taxativa la operación respondiendo HTTP 400 Bad Request, impidiendo cualquier cambio o devolución por superación del plazo de garantía reglamentario.]**
-- **CU22[Paso 1.4: [alt: Garantía Vigente] Si delta_dias <= 14 días, la interfaz despliega las prendas detalladas en la factura y habilita las opciones: Cambio por Talla, Cambio por Modelo o Devolución Definitiva.]**
-- **CU22[Paso 2: [alt: Cambio por Talla] El cajero selecciona la prenda comprada y la nueva talla deseada (mismo SKU/modelo). El sistema verifica disponibilidad en la sucursal, reingresa la talla anterior, descuenta la nueva y emite el comprobante de cambio con diferencia Bs. 0.00.]**
-- **CU22[Paso 3: [alt: Cambio por Modelo - Prenda más costosa] Si el cliente escoge un modelo distinto de mayor precio, el sistema calcula la diferencia (precio_nuevo - precio_antiguo) y solicita su cobro inmediato en caja o pasarela antes de despachar la prenda.]**
-- **CU22[Paso 4: [alt: Cambio por Modelo - Prenda más económica] Si el nuevo modelo es de menor precio, no se realiza devolución en dinero en efectivo; el sistema genera automáticamente una Nota de Crédito oficial (CE_NotaCredito) por el saldo a favor para que el cliente lo use en su siguiente compra.]**
-- **CU22[Paso 5: [alt: Devolución Definitiva] Se aprueba el reingreso al inventario de la sucursal, se asienta el movimiento en el Kardex y se emite la Nota de Crédito o comprobante de reembolso correspondiente.]**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — Mensajes Canónicos):
+##### Fase 1: Búsqueda y Validación de Plazo de Garantía (14 Días)
+- **`CU22[Paso 1: El Cajero o Encargado ingresa el código de la factura oficial (ej. 'FAC-10024') en la interfaz IU_Gestion_Devoluciones.]`**
+- **`CU22[Paso 2: La interfaz consulta la factura al controlador (GET /api/v1/sales/returns/lookup-invoice?codigo=FAC-10024 o /invoices/by-code/{codigo}).]`**
+- **`CU22[Paso 3: El CTR_Devoluciones_Y_Cambios recupera la factura y sus prendas asociadas desde Entidad_Factura y Entidad_Orden.]`**
+- **`CU22[Paso 4: Entidad_Factura retorna la información de la compra con su fecha de emisión y detalle de prendas.]`**
+- **`CU22[Paso 5a / 6a: [alt: Plazo Vencido > 14 días (2 semanas)] El controlador bloquea el proceso respondiendo HTTP 400 Bad Request y la interfaz despliega la alerta 'Garantía Expirada - No procede devolución ni cambio'.]`**
+- **`CU22[Paso 5b / 6b: [else: Garantía Vigente <= 14 días] El controlador responde HTTP 200 OK con warranty_valid=True y la interfaz despliega las prendas facturadas para seleccionar la acción.]`**
+
+##### Fase 2: Ejecución de la Acción Seleccionada
+- **`CU22[Opción A - Cambio por Talla (Mismo SKU / Misma Prenda):]`**
+  - **`CU22[Paso 7a: El Cajero solicita el cambio de talla (solicitarCambioTalla).]`**
+  - **`CU22[Paso 8a: La interfaz envía la solicitud al controlador (POST /api/v1/sales/returns con tipo='CAMBIO_TALLA').]`**
+  - **`CU22[Paso 9a: El controlador ordena a Entidad_Inventario reingresar la talla original (+1) y descontar la nueva (-1).]`**
+  - **`CU22[Paso 10a: Entidad_Inventario confirma el ajuste de existencias.]`**
+  - **`CU22[Paso 11a: El controlador registra el comprobante en Entidad_OrdenDevolucion con diferencia Bs. 0.00.]`**
+  - **`CU22[Paso 12a: Entidad_OrdenDevolucion retorna el ID correlativo del trámite.]`**
+  - **`CU22[Paso 13a / 14a: El controlador emite confirmación de cambio exitoso y la interfaz expide el comprobante de entrega de la prenda.]`**
+
+- **`CU22[Opción B - Cambio por Modelo (Diferente Prenda / Diferencia de Precio):]`**
+  - **`CU22[Paso 7b: El Cajero selecciona el nuevo modelo (solicitarCambioModelo).]`**
+  - **`CU22[Paso 8b: La interfaz envía la solicitud al controlador (POST /api/v1/sales/returns con tipo='CAMBIO_MODELO').]`**
+  - **`CU22[Paso 9b / 10b: El controlador intercambia stock en Entidad_Inventario (devuelta=+1, nueva=-1).]`**
+  - **`CU22[Subflujo B.1 - Prenda más cara (Precio Nuevo > Precio Antiguo):]`**
+    - **`CU22[Paso 11b / 12b: El controlador instruye a Entidad_Sesion el cobro de la diferencia exacta en caja (monto_diferencia > Bs. 0.00).]`**
+    - **`CU22[Paso 13b / 14b: Se registra el cambio en Entidad_OrdenDevolucion con el monto cobrado.]`**
+    - **`CU22[Paso 15b / 16b: La interfaz confirma el cambio y solicita cobrar la diferencia al cliente antes de entregar la nueva prenda.]`**
+  - **`CU22[Subflujo B.2 - Prenda más barata (Precio Nuevo < Precio Antiguo - Cero Efectivo):]`**
+    - **`CU22[Paso 11c / 12c: El controlador emite obligatoriamente una Nota de Crédito en Entidad_NotaCredito por el saldo a favor (motivo='CAMBIO_MODELO_MENOR_VALOR').]`**
+    - **`CU22[Paso 13c / 14c: Se registra el cambio en Entidad_OrdenDevolucion vinculado a la Nota de Crédito.]`**
+    - **`CU22[Paso 15c / 16c: La interfaz confirma el cambio y emite la Nota de Crédito para la próxima compra del cliente.]`**
+
+- **`CU22[Opción C - Devolución Definitiva (Reembolso Oficial):]`**
+  - **`CU22[Paso 7d / 8d: El Cajero solicita devolución definitiva indicando el motivo (POST /api/v1/sales/returns con tipo='DEVOLUCION_DINERO').]`**
+  - **`CU22[Paso 9d / 10d: El controlador ordena el reingreso físico de la prenda al inventario de la sucursal.]`**
+  - **`CU22[Paso 11d / 12d: El controlador genera la Nota de Crédito o comprobante de liquidación por el total en Entidad_NotaCredito.]`**
+  - **`CU22[Paso 13d / 14d: La interfaz emite el comprobante finalizado de la devolución.]`**
 
 ### CU23: Gestionar arqueo de caja (apertura y cierre ciego)
 
@@ -1644,66 +1667,79 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor C as «actor»<br/>:Cliente
-    participant IU as «boundary»<br/>IU_Reserva : ReserveFittingComponent
-    participant CTR as «control»<br/>CTR_Res : ReservationsRouter
-    participant PAS as «external»<br/>PAS_PayPal : PayPalGatewayService
-    participant CE_I as «entity»<br/>CE_Inventario : InventoryModel
-    participant CE_R as «entity»<br/>CE_Reserva : CustomerReservationModel
-    participant CE_K as «entity»<br/>CE_Kardex : InventoryLedgerModel
-    participant NOTIF as «control»<br/>CTR_Notif : PushBrokerService
+    actor C as Cliente
+    participant IU as IU_Reserva
+    participant CTR as CTR_Reservas
+    participant CE_B as CE_Sucursal
+    participant CE_I as CE_Inventario
+    participant PAS as PAS_PayPal
+    participant CE_R as CE_Reserva
+    participant CE_K as CE_Kardex
+    participant NOTIF as CTR_Notificaciones
 
-    C->>+IU: solicitarReservaProbador(sucursal_id: UUID, fecha_cita: DateTime, items: List[ItemReservaDTO])
-    
-    %% Regla de Negocio: Límite de 5 prendas
-    alt [len(items) > 5]
-        IU-->>C: mostrarError("El límite máximo por cita es de 5 prendas")
-    else [len(items) <= 5]
-        IU->>+CTR: POST /api/v1/reservations/quote-deposit (items)
-        CTR->>CTR: calcularTotalYDeposito(items) -> total = Bs 400.00, seña_50_pct = Bs 200.00
-        CTR-->>-IU: 200 OK: CotizacionSeniaDTO(total=400.00, senia=200.00)
+    C->>+IU: 1: solicitarReservaProbador(sucursal_id, fecha_cita, hora_cita, items, metodo_pago)
+    IU->>+CTR: 2: POST /api/v1/reservations (ReservationCreate)
+
+    CTR->>+CE_B: 3: find_branch(branch_id)
+    CE_B-->>-CTR: 4: Branch(id, name, opening_time, closing_time)
+
+    CTR->>CTR: 5: validar_fecha_horario_y_limite(fecha, hora, max_5_prendas)
+
+    loop Por cada prenda seleccionada (máx 5)
+        CTR->>+CE_I: 6: select_for_update(branch_id, variant_id)
+        CE_I-->>-CTR: 7: stock_disponible, base_price
     end
 
-    %% Cobro de la Seña del 50%
-    C->>+IU: confirmarPagoSenia(metodo="PAYPAL", auth_data)
-    IU->>+PAS: createAndCaptureOrder(amount=200.00, currency="BOB")
-    alt [Pago de seña rechazado / Fondos insuficientes]
-        PAS-->>IU: PaymentFailedException()
-        IU-->>C: mostrarAlertaPago("Transacción no autorizada. Intenta con otro medio.")
-    else [Pago de seña exitoso]
-        PAS-->>-IU: CaptureResponse(status="COMPLETED", tx_id="TX-RES-918")
-        
-        %% Creación de la Reserva
-        IU->>+CTR: POST /api/v1/reservations/confirm (sucursal_id, fecha_cita, items, tx_id="TX-RES-918", seña=200.00)
-        
-        loop [Por cada prenda a apartar]
-            CTR->>+CE_I: transferirADisponibilidadReserva(sucursal_id, variante_id, cant=1)
-            CE_I-->>-CTR: stock_apartado: bool
-            CTR->>+CE_K: registrarMovimiento(tipo='BLOQUEO_RESERVA_PROBADOR', cant=-1)
-            CE_K-->>-CTR: asiento_id
-        end
+    CTR->>CTR: 8: calcularMontos(total, seña_50)
 
-        CTR->>+CE_R: create_reservation(cliente_id, sucursal_id, fecha_cita, seña_pagada=200.00, expires_at=fecha_cita+48h, estado='RESERVADA')
-        CE_R-->>-CTR: reserva: CustomerReservation(codigo="RES-2026-4412", qr_token="eyJhbGciOi...")
-
-        CTR->>+NOTIF: despacharConfirmacionCita(cliente_id, "Tu cita y vestidor están reservados. Código: RES-2026-4412")
-        NOTIF-->>-CTR: push_ok
-
-        CTR-->>-IU: 201 Created: ReservationResultDTO(codigo="RES-2026-4412", qr_url="/qr/res-4412.png", saldo_restante=200.00)
-        IU-->>-C: mostrarTicketDigitalConQR(codigo="RES-2026-4412", validez="48 horas")
+    opt payment_method == PAYPAL
+        CTR->>+PAS: 9a: verify_completed_order(paypal_order_id, seña_50)
+        PAS-->>-CTR: 9b: seña_verificada
     end
+
+    CTR->>+CE_R: 9: insert_reservation(code="RES-XXXXXX", customer_id, branch_id, status="PENDING", total, seña_50, expires_at=now+48h)
+    CE_R-->>-CTR: 10: reservation_id
+
+    loop Por cada prenda
+        CTR->>+CE_I: 11: deduct_stock(branch_id, variant_id, qty)
+        CE_I-->>-CTR: 12: stock_apartado_HOLD
+        CTR->>+CE_K: 13: insert_ledger(tipo="RESERVA", cantidad=-qty, ref="RES-XXXXXX")
+        CE_K-->>-CTR: 14: asiento_registrado
+        CTR->>CE_R: 15: insert_reservation_item(reservation_id, variant_id, qty, unit_price)
+    end
+
+    CTR->>+NOTIF: 16: notificar_cliente(customer_id, "Reserva registrada")
+    NOTIF-->>-CTR: 17: ok
+    CTR->>+NOTIF: 18: notificar_personal_sucursal(branch_id, "Nueva reserva probador")
+    NOTIF-->>-CTR: 19: ok
+
+    CTR-->>-IU: 20: HTTP 201 Created ReservationResponse(code, status="PENDING", total, seña_50, balance_due)
+    IU-->>-C: 21: mostrarConfirmacionReserva(codigo, fecha_cita, saldo_restante)
 ```
 
-#### Desglose Paso a Paso (Nomenclatura Correlativa Formal):
-- **`CU26[Paso 1: El cliente selecciona hasta un máximo de 5 prendas del catálogo digital, indicando la sucursal y la fecha/hora para la prueba física.]`**
-- **`CU26[Paso 2: La interfaz valida que no se supere el límite de 5 prendas y solicita la cotización de la seña (50%) a CTR_Reservas.]`**
-- **`CU26[Paso 3: El cliente confirma el pago del anticipo de garantía a través de la pasarela PAS_PayPal.]`**
-- **`CU26[Paso 4: Confirmado el pago de la seña, la interfaz despacha la solicitud HTTP POST /api/v1/reservations/confirm al controlador.]`**
-- **`CU26[Paso 5: [loop: Por cada prenda] El controlador transfiere la unidad de stock disponible a stock apartado en CE_Inventario y asienta el bloqueo en CE_Kardex.]`**
-- **`CU26[Paso 6: Se persiste la reserva en CE_Reserva con estado 'RESERVADA', código correlativo único (RES-2026-XXXX) y vigencia de 48 horas.]`**
-- **`CU26[Paso 7: El servicio de notificaciones despacha una alerta push/correo con la confirmación de la cita y el resumen de la seña.]`**
-- **`CU26[Paso 8: La interfaz despliega el voucher digital interactivo con el código QR para presentación física en el probador.]`**
+#### Desglose Paso a Paso (Nomenclatura Correlativa Formal — 21 Mensajes Canónicos):
+- **`CU26[Mensaje 1: El cliente selecciona hasta 5 prendas, sucursal, fecha y horario de cita en IU_Reserva.]`**
+- **`CU26[Mensaje 2: La interfaz envía la solicitud HTTP POST /api/v1/reservations con el DTO ReservationCreate al controlador CTR_Reservas.]`**
+- **`CU26[Mensaje 3: El controlador consulta los datos y estado de la sucursal física en CE_Sucursal.]`**
+- **`CU26[Mensaje 4: CE_Sucursal retorna los datos de la sucursal, incluyendo horario de apertura y cierre.]`**
+- **`CU26[Mensaje 5: El controlador valida que la fecha no sea pasada, esté dentro del horario de atención y no exceda 5 prendas.]`**
+- **`CU26[Mensaje 6: [loop: Por cada prenda] El controlador ejecuta bloqueo pesimista en CE_Inventario mediante SELECT FOR UPDATE.]`**
+- **`CU26[Mensaje 7: CE_Inventario confirma existencia física suficiente y retorna el precio base vigente.]`**
+- **`CU26[Mensaje 8: El controlador calcula matemáticamente el monto total y la seña obligatoria del 50%.]`**
+- **`CU26[Mensaje 9a/9b: [opt: PayPal] Si el abono es por PayPal, el controlador verifica la transacción con PAS_PayPal.]`**
+- **`CU26[Mensaje 9: El controlador persiste la reserva en CE_Reserva con estado 'PENDING', código RES-XXXXXX y vigencia 48h.]`**
+- **`CU26[Mensaje 10: CE_Reserva retorna el reservation_id generado.]`**
+- **`CU26[Mensaje 11: [loop: Por cada prenda] El controlador aparta las prendas físicas en CE_Inventario (bloqueo HOLD).]`**
+- **`CU26[Mensaje 12: CE_Inventario confirma el stock retenido.]`**
+- **`CU26[Mensaje 13: El controlador asienta el movimiento en CE_Kardex con tipo 'RESERVA' y referencia RES-XXXXXX.]`**
+- **`CU26[Mensaje 14: CE_Kardex confirma el registro del asiento.]`**
+- **`CU26[Mensaje 15: El controlador vincula la prenda apartada en el detalle de la reserva en CE_Reserva.]`**
+- **`CU26[Mensaje 16: El controlador emite notificación de confirmación al cliente en CTR_Notificaciones.]`**
+- **`CU26[Mensaje 17: CTR_Notificaciones confirma el despacho del aviso al cliente.]`**
+- **`CU26[Mensaje 18: El controlador notifica al personal de la sucursal sobre la nueva reserva con seña pagada.]`**
+- **`CU26[Mensaje 19: CTR_Notificaciones confirma la alerta al personal.]`**
+- **`CU26[Mensaje 20: El controlador responde a la interfaz con HTTP 201 Created ReservationResponse.]`**
+- **`CU26[Mensaje 21: La interfaz muestra la confirmación de la cita con voucher, código y saldo restante a pagar en tienda.]`**
 
 ---
 
@@ -2020,7 +2056,6 @@ sequenceDiagram
 #### Diagrama de Secuencia (Mermaid):
 ```mermaid
 sequenceDiagram
-    autonumber
     actor C as «actor»<br/>:Cliente
     participant IU as «boundary»<br/>IU_Vestidor : VirtualTryonComponent
     participant CTR as «control»<br/>CTR_IA : VirtualTryonRouter
@@ -2030,50 +2065,50 @@ sequenceDiagram
     participant CE_P as «entity»<br/>CE_Prenda : ProductVariantModel
     participant CE_M as «entity»<br/>CE_TablaTallas : SizeMeasurementModel
 
-    C->>+IU: cargarFotografiaYPrenda(foto_cliente: File, producto_id: UUID)
+    C->>+IU: 1: cargarFotografiaYPrenda(foto_cliente: File, producto_id: UUID)
     
     %% Paso 1: Remoción de Fondo y Detección Anatómica
-    IU->>+CTR: POST /api/v1/ia/segment-person (multipart: image/jpeg)
-    CTR->>+SVC_VTON: segmentarSiluetaHumana(raw_image: Bytes): SegmentedMaskDTO
+    IU->>+CTR: 2: POST /api/v1/ia/segment-person (multipart: image/jpeg)
+    CTR->>+SVC_VTON: 3: segmentarSiluetaHumana(raw_image: Bytes): SegmentedMaskDTO
     alt [No se detecta pose humana completa en la imagen]
-        SVC_VTON-->>CTR: HumanDetectionException(confidence < 0.85)
-        CTR-->>IU: 422 Unprocessable Entity: {error: "No se identificó cuerpo humano completo"}
-        IU-->>C: mostrarError("Sube una foto de cuerpo completo con buena iluminación")
+        SVC_VTON-->>CTR: 4a: HumanDetectionException(confidence < 0.85)
+        CTR-->>IU: 5a: 422 Unprocessable Entity: {error: "No se identificó cuerpo humano completo"}
+        IU-->>C: 6a: mostrarError("Sube una foto de cuerpo completo con buena iluminación")
     else [Detección de pose válida (MediaPipe / U2Net)]
-        SVC_VTON-->>-CTR: SegmentedMaskDTO(image_no_bg_url, bounding_box)
-        CTR-->>-IU: 200 OK: {segmented_url: "/tmp/masks/usr_91.png"}
+        SVC_VTON-->>-CTR: 4b: SegmentedMaskDTO(image_no_bg_url, bounding_box)
+        CTR-->>-IU: 5b: 200 OK: {segmented_url: "/tmp/masks/usr_91.png"}
     end
 
     %% Paso 2: Cálculo Antropométrico de Talla
-    C->>+IU: ingresarMedidasCorporales(estatura_cm: 175, peso_kg: 70, pecho_cm: 98, cintura_cm: 82)
-    IU->>+CTR: POST /api/v1/ia/recommend-size (medidas: AntropometriaDTO, producto_id: UUID)
-    CTR->>+SVC_SIZE: calcularTallaOptima(medidas, producto_id)
-    SVC_SIZE->>+CE_M: get_measurements_by_product(producto_id)
-    CE_M-->>-SVC_SIZE: SizeMatrix(S=[88-92], M=[96-100], L=[104-108])
-    SVC_SIZE->>SVC_SIZE: evaluarHolguraTension(pecho_cm=98 -> Match Talla 'M', calce='Slim Fit')
-    SVC_SIZE-->>-CTR: RecomendacionTallaDTO(talla='M', ajuste='Exacto en pecho, holgado en cintura', score=0.94)
-    CTR-->>-IU: 200 OK: RecomendacionTallaDTO
-    IU-->>C: renderizarSugerenciaTalla("Tu talla ideal es M (94% coincidencia)")
+    C->>+IU: 6: ingresarMedidasCorporales(estatura_cm: 175, peso_kg: 70, pecho_cm: 98, cintura_cm: 82)
+    IU->>+CTR: 7: POST /api/v1/ia/recommend-size (medidas: AntropometriaDTO, producto_id: UUID)
+    CTR->>+SVC_SIZE: 8: calcularTallaOptima(medidas, producto_id)
+    SVC_SIZE->>+CE_M: 9: get_measurements_by_product(producto_id)
+    CE_M-->>-SVC_SIZE: 10: SizeMatrix(S=[88-92], M=[96-100], L=[104-108])
+    SVC_SIZE->>SVC_SIZE: 11: evaluarHolguraTension(pecho_cm=98 -> Match Talla 'M', calce='Slim Fit')
+    SVC_SIZE-->>-CTR: 12: RecomendacionTallaDTO(talla='M', ajuste='Exacto en pecho, holgado en cintura', score=0.94)
+    CTR-->>-IU: 13: 200 OK: RecomendacionTallaDTO
+    IU-->>C: 14: renderizarSugerenciaTalla("Tu talla ideal es M (94% coincidencia)")
 
     %% Paso 3: Renderizado de Ropa Virtual (VTON con Cascada de Fallback)
-    C->>+IU: ejecutarPruebaVirtual(variante_id: UUID, modo_render: EnumModo)
-    IU->>+CTR: POST /api/v1/ia/render-vton (persona_url, prenda_id, modo)
-    CTR->>+CE_P: get_garment_texture_hd(prenda_id)
-    CE_P-->>-CTR: GarmentAsset(hd_texture_url, category="TOP")
-    CTR->>+SVC_VTON: ejecutarInferenciaVTON(person_masked, garment_hd)
+    C->>+IU: 15: ejecutarPruebaVirtual(variante_id: UUID, modo_render: EnumModo)
+    IU->>+CTR: 16: POST /api/v1/ia/render-vton (persona_url, prenda_id, modo)
+    CTR->>+CE_P: 17: get_garment_texture_hd(prenda_id)
+    CE_P-->>-CTR: 18: GarmentAsset(hd_texture_url, category="TOP")
+    CTR->>+SVC_VTON: 19: ejecutarInferenciaVTON(person_masked, garment_hd)
 
     alt [Inferencia en Nube Primaria: FASHN.ai API Activa y con Cuota]
-        SVC_VTON->>+EXT_HF: POST /v1/run (model="idm-vton", garment_img, person_img)
-        EXT_HF-->>-SVC_VTON: InferenceResult(status="SUCCESS", rendered_image_url)
+        SVC_VTON->>+EXT_HF: 20a: POST /v1/run (model="idm-vton", garment_img, person_img)
+        EXT_HF-->>-SVC_VTON: 21a: InferenceResult(status="SUCCESS", rendered_image_url)
     else [Fallback Local: FASHN.ai no responde / Timeout > 8s]
-        SVC_VTON->>SVC_VTON: ejecutarWarpingLocalAffine(thin_plate_spline, keypoints_pose)
+        SVC_VTON->>SVC_VTON: 20b: ejecutarWarpingLocalAffine(thin_plate_spline, keypoints_pose)
     end
 
-    SVC_VTON-->>-CTR: RenderResponseDTO(rendered_url, engine_used="FASHN_CLOUD" | "LOCAL_WARP")
-    CTR-->>-IU: 200 OK: RenderResponseDTO
-    IU-->>-C: mostrarPrendaPuestaEnCuerpo(zoom_habilitado=true)
-    C->>+IU: clickBotonAccionDirecta("Agregar Talla M Recomendada al Carrito")
-    IU-->>-C: carritoActualizadoConTallaM()
+    SVC_VTON-->>-CTR: 22: RenderResponseDTO(rendered_url, engine_used="FASHN_CLOUD" | "LOCAL_WARP")
+    CTR-->>-IU: 23: 200 OK: RenderResponseDTO
+    IU-->>-C: 24: mostrarPrendaPuestaEnCuerpo(zoom_habilitado=true)
+    C->>+IU: 25: clickBotonAccionDirecta("Agregar Talla M Recomendada al Carrito")
+    IU-->>-C: 26: carritoActualizadoConTallaM()
 ```
 
 #### Desglose Paso a Paso (Nomenclatura Correlativa Formal):

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 from app.db.session import get_db
@@ -413,93 +413,19 @@ def _build_order_response(db: Session, order: Order) -> OrderResponse:
     )
 
 
-# [CU19 - Paso 1] (IU) El cajero ingresa cobro en U_PuntoDeVentaPOS
+# [DSC019 - Mensaje 1] Cajero -> IU_POS: 1: ingresarVentaDirecta(sesion_id, items, efectivo_recibido, nit_ci)
+# [DSC018 - Mensaje 1] Cliente -> IU_Checkout: 1: iniciarCheckout(sucursal_id, delivery_type, medio_pago, nit_ci, coupon_code)
+# [DSC019 - Mensaje 2] IU_POS -> CTR_POS: 2: POST /api/v1/pos/orders (PosCheckoutDTO)
 @router.post("/pos/orders", response_model=OrderResponse, status_code=201)
-# [CU18 - Paso 1] (IU) El cliente inicia checkout online en IU_CheckoutOnline seleccionando entrega y pasarela
+# [DSC018 - Mensaje 2] IU_Checkout -> CTR_Ventas: 2: POST /api/v1/sales/checkout (CheckoutRequest)
 @router.post("/checkout", response_model=OrderResponse, status_code=201)
-# [CU18 - Paso 2] / [DSC018 - Paso 2] +1. process_checkout(data) / [CU19 - Paso 2] +1. create_pos_order(payload)
 def process_checkout(
     data: CheckoutRequest,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    [CU18 / CU19 / CU20] Procesa una compra omnicanal con herencia de pagos y facturación IVA 13% (ACID).
-    
-    ================================================================================================
-    DIAGRAMA DE SECUENCIA UML 2.5: CU19: Procesar venta presencial en caja
-    Arquitectura / Estereotipos de Análisis BCE:
-      - Actor: Cajero (personal de tienda frente al mostrador)
-      - Boundary (IU): U_PuntoDeVentaPOS (Terminal POS en Angular)
-      - Control: CTR_POS (Controlador FastAPI /api/v1/pos/orders y /checkout)
-      - Entity: CE_SesionCaja (Modelo CashShift - Turno/Sesión de Caja activo)
-      - Entity: CE_Inventario (Modelo Inventory / InventoryLedger - Kardex)
-      - Entity: CE_Orden (Modelo Order y OrderItem - Cabecera y detalle de venta)
-      - Entity: CE_MedioDePago (Modelo Payment / EfectivoPayment / Tarjeta / QR)
-      - Control Auxiliar: CTR_Facturacion (Sub-controlador fiscal de emisión computarizada)
-      - Entity: CE_Factura (Modelo Invoice - Documento tributario con IVA 13% y código de control)
-      - Dispositivo Externo: Dispositivo_Impresora (Impresora térmica de tickets 80mm ESC/POS)
-    
-    Trazabilidad de Mensajes y Pasos Correlativos:
-      1: ingresarCobro(session_id=45, items, total=200.00, medio="EFECTIVO", recibido=250.00, NIT="1029384")
-      1.1: POST /api/v1/pos/orders (payload)
-      1.2: get_session(session_id=45) -> session_status = "ABIERTA"
-      --- Combined Fragment: [Transacción Rápida de Venta Mostrador y Emisión] ---
-      1.3: insert_order(branch_id=1, channel="POS", total=200.00, status="COMPLETADO") -> order_id = 880
-      1.4: deduct_stock(branch_id=1, items) -> stock_deducted_ok
-      [Nota]: Cálculo de cambio en tiempo real: Vuelta = 250.00 - 200.00 = Bs. 50.00
-      1.5: insert_payment(order_id=880, type="EFECTIVO", amount=200.00, cash_received=250.00, cash_change=50.00) -> pay_ok
-      1.6: issue_invoice(order_id=880, nit="1029384", total=200.00)
-      1.6.1: insert(order_id=880, doc_type="FACTURA", subtotal=200.00, tax_amount=26.00) -> invoice_id = 512, invoice_data
-      1.7: print_receipt(raw_thermal_data, width=80mm) -> print_ok
-      --- Fin de Bloque Transaccional ---
-      Retorno HTTP: HTTP 200 OK (order_id=880, change=50.00)
-      Retorno IU: mostrarCambioYConfirmacion(vuelto=Bs. 50.00, gaveta_abierta)
-    ================================================================================================
-    
-        ================================================================================================
-    DIAGRAMA DE SECUENCIA UML 2.5: CU18: Procesar compra omnicanal (Checkout Web / Móvil)
-    Arquitectura / Estereotipos de Análisis BCE:
-      - Actor: Cliente (Usuario final registrado desde App Móvil o Web)
-      - Boundary (IU): IU_CheckoutOnline (Modal de Checkout con selección de entrega y pasarela)
-      - Control: CTR_Ventas (Controlador FastAPI POST /api/v1/sales/checkout)
-      - Entity: CE_Orden (Modelo Order - Pedido con delivery_type, pickup_deadline, payment_session_expires_at)
-      - Entity: CE_DetalleOrden (Modelo OrderItem - Prendas, cantidades y precios unitarios vigentes)
-      - Entity: CE_Inventario (Modelo Inventory - Stock físico por sucursal / almacén)
-      - Entity: CE_InventoryLedger (Modelo InventoryLedger - Kardex valorado de movimientos de inventario)
-      - Entity: CE_Cupon (Modelo Coupon - Validación de cupones de descuento promocional CU13)
-      - Entity: CE_MedioDePago (Modelo Payment / Tarjeta / QR / Efectivo - Registro polimórfico de pago)
-      - Control Auxiliar: CTR_Facturacion (Sub-controlador tributario computarizado)
-      - Entity: CE_Factura (Modelo Invoice - Factura fiscal oficial con 13% IVA y código de control)
-      - Entity: CE_NotificacionPush (Modelo Notification - Alerta push inmediata al dispositivo del cliente)
-
-    Reglas de Negocio Clave CU18:
-      1. Timeout de Pasarela de Pagos (5 Minutos / 300 Segundos):
-         - Al iniciarse el checkout, se reserva temporalmente el stock y se fija payment_session_expires_at = now + 5 min.
-         - Si transcurren 5 minutos sin confirmación de pago, el cron o endpoint check_payment_timeout cancela la orden
-           y libera el stock reservado inmediatamente a DISPONIBLE (Flujo Alterno A).
-      2. Modalidad de Entrega (delivery_type):
-         - ENVIO_DOMICILIO: Despacho por delivery con tarifa de envío.
-         - RETIRO_TIENDA: Costo de envío Bs. 0.00. Se fija un plazo de custodia estricto de 48 horas (pickup_deadline).
-         - Custodia 48h vencida: Si el cliente no retira la prenda en 48 horas, retorna a exhibición/venta y se
-           emite una Nota de Crédito CE_NotaDeCredito automática por el 100% de la compra (Flujo Alterno B).
-
-    Trazabilidad de Mensajes y Pasos Correlativos CU18:
-      1: iniciarCheckout(items, sucursal_id, delivery_type, medio_pago, nit_datos)
-      1.1: POST /api/v1/sales/checkout (CheckoutRequest)
-      1.2: verificar_disponibilidad_stock(branch_id, items) -> stock_ok
-      1.3: set_payment_session_timer(ttl=300s) -> payment_session_expires_at
-      1.4: [alt: RETIRO_TIENDA] set_pickup_deadline(ttl=48h) -> pickup_deadline
-      1.5: [opt: Cupón] validar_y_aplicar_descuento(coupon_code) -> discount_amount
-      1.6: insert_order(user_id, branch_id, total, status='PAGADA', delivery_type) -> order_id
-      1.7: deduct_stock_and_record_ledger(branch_id, items, ref='VENTA-ONLINE')
-      1.8: insert_payment_polymorphic(order_id, payment_data)
-      1.9: issue_invoice(order_id, nit, total) -> CE_Factura (IVA 13%, código de control)
-      1.10: notify_customer_push(user_id, "Pedido confirmado", order_id)
-      Retorno HTTP: HTTP 201 Created (OrderResponse con delivery_type, pickup_deadline, invoice_data)
-    ================================================================================================
-    """
+    """[CU18 / CU19 / CU20] Procesa una compra omnicanal (E-commerce / POS) con facturación IVA 13% y control transaccional ACID."""
     # CU18[Paso 1] / CU19[Paso 1.1]: Validación de canal de atención y contexto de sucursal
     # [Separación por sucursal] Una venta POS es una operación de personal de tienda: exige
     # rol de staff y fuerza la sucursal real del usuario (ignora branch_id del cliente).
@@ -520,11 +446,12 @@ def process_checkout(
     if data.channel == "POS":
         if not data.cash_shift_id:
             raise HTTPException(status_code=400, detail="Ventas en POS requieren un turno de caja activo (cash_shift_id).")
-        # [CU19 - Paso 3] / [DSC019 - Paso 3] +2. get_session(data.cash_session_id)
+        # [DSC019 - Mensaje 3] CTR_POS -> CE_SesionCaja: 3: get_active_shift(sesion_id)
         shift = db.query(CashShift).filter(
             CashShift.id == data.cash_shift_id,
             CashShift.status == "ABIERTO"
         ).first()
+        # [DSC019 - Mensaje 4] CE_SesionCaja -->> CTR_POS: 4: shift CashShift(id=45, estado=ABIERTA)
         if not shift:
             raise HTTPException(status_code=400, detail="El turno de caja especificado no existe o ya está cerrado (session_status != 'ABIERTA').")
         if shift.cashier_id != current_user.id:
@@ -549,10 +476,11 @@ def process_checkout(
             unit_price = _get_product_effective_price(db, prod)
             checkout_items.append((item.variant_id, item.quantity, unit_price))
     else:
-        # Canal ONLINE: tomar ítems del carrito del usuario
+        # [DSC018 - Mensaje 3] CTR_Ventas -> CE_Carrito: 3: get_cart_items(user_id)
         cart = db.query(Cart).filter(Cart.user_id == current_user.id).first()
         if not cart or not cart.items:
             raise HTTPException(status_code=400, detail="El carrito de compras está vacío.")
+        # [DSC018 - Mensaje 4] CE_Carrito -->> CTR_Ventas: 4: cart_items[(variant_id, qty)]
         for item in cart.items:
             variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
             if not variant:
@@ -561,14 +489,16 @@ def process_checkout(
             unit_price = _get_product_effective_price(db, prod)
             checkout_items.append((item.variant_id, item.quantity, unit_price))
 
-    # [CU18 - Paso 3] / [DSC018 - Paso 3] +2. verificar_stock_disponible_sucursal(branch_id, items) / [CU19 - Paso 3] +2. validar_stock(branch_id, items)
-    # CU18[Paso 3] / CU19[Paso 1.4]: Validar stock en la sucursal seleccionada y calcular subtotal
+    # [DSC018 - Mensaje 5] [loop: Por cada variante] CTR_Ventas -> CE_Inventario: 5: select_for_update(branch_id, variant_id)
+    # [DSC019 - Mensaje 5] [loop: Por cada variante] CTR_POS -> CE_Inventario: 5: select_for_update(branch_id, variant_id)
     subtotal = 0.0
     for var_id, qty, unit_price in checkout_items:
         inv = db.query(Inventory).filter(
             Inventory.branch_id == data.branch_id,
             Inventory.variant_id == var_id
         ).with_for_update().first()
+        # [DSC018 - Mensaje 6] CE_Inventario -->> CTR_Ventas: 6: stock_ok, unit_price
+        # [DSC019 - Mensaje 6] CE_Inventario -->> CTR_POS: 6: stock_disponible, unit_price
         current_stock = inv.stock_actual if inv else 0
         if current_stock < qty:
             raise HTTPException(
@@ -580,7 +510,7 @@ def process_checkout(
     subtotal = round(subtotal, 2)
 
     # [CU18 - Paso 4] / [DSC018 - Paso 4] +3. aplicar_cupon_descuento_si_existe(discount_code)
-    # CU18[Paso 4]: Aplicar cupón de descuento si existe (CU13)
+    # [DSC018 - Mensaje 7] [opt: Cupón] CTR_Ventas -> CE_Cupon: 7: validar_cupon(code, min_purchase)
     discount_amount = 0.0
     if data.coupon_code:
         coupon = db.query(Coupon).filter(
@@ -595,10 +525,12 @@ def process_checkout(
             else:
                 discount_amount = round(min(subtotal, float(coupon.discount_value)), 2)
             coupon.used_count += 1
+            # [DSC018 - Mensaje 8] CE_Cupon -->> CTR_Ventas: 8: discount_amount
 
     total_amount = max(0.0, round(subtotal - discount_amount, 2))
 
-    # [CU18 - Paso 5] / [DSC018 - Paso 5] +4. insert_order(branch_id, channel, total, delivery_type) / [CU19 - Paso 5] +4. insert_order(branch_id=1, channel="POS")
+    # [DSC018 - Mensaje 9] CTR_Ventas -> CE_Orden: 9: insert_order(user_id, branch_id, channel="ONLINE", status="PAGADA", total, delivery_type, pickup_deadline)
+    # [DSC019 - Mensaje 7] [Transacción ACID] CTR_POS -> CE_Orden: 7: insert_order(sucursal_id, canal=POS, total, estado=COMPLETADO)
     order_initial_status = "COMPLETADO" if data.channel == "POS" else "PAGADA"
     deliv_type = data.delivery_type or ("RETIRO_TIENDA" if data.shipping_method == "PICKUP" else "ENVIO_DOMICILIO")
     now_utc = datetime.now(timezone.utc)
@@ -621,18 +553,25 @@ def process_checkout(
     )
     db.add(order)
     db.flush()
+    # [DSC018 - Mensaje 10] CE_Orden -->> CTR_Ventas: 10: order_id
+    # [DSC019 - Mensaje 8] CE_Orden -->> CTR_POS: 8: orden Order(id=880)
 
     order_ref = f"ORD-{order.id}"
-    # [CU18 - Paso 6] / [DSC018 - Paso 6] +5. deduct_stock_and_record_ledger(branch_id, items) / [CU19 - Paso 7] +5. deduct_stock(branch_id, items)
     for var_id, qty, unit_price in checkout_items:
         db.add(OrderItem(order_id=order.id, variant_id=var_id, quantity=qty, unit_price=unit_price))
 
+        # [DSC018 - Mensaje 11] CTR_Ventas -> CE_Inventario: 11: deduct_stock(branch_id, variant_id, qty)
+        # [DSC019 - Mensaje 9] CTR_POS -> CE_Inventario: 9: deduct_stock(sucursal_id, variante_id, cantidad)
         inv = db.query(Inventory).filter(
             Inventory.branch_id == data.branch_id,
             Inventory.variant_id == var_id
         ).with_for_update().first()
         inv.stock_actual -= qty
+        # [DSC018 - Mensaje 12] CE_Inventario -->> CTR_Ventas: 12: stock_descontado
+        # [DSC019 - Mensaje 10] CE_Inventario -->> CTR_POS: 10: stock_descontado
 
+        # [DSC018 - Mensaje 13] CTR_Ventas -> CE_Kardex: 13: insert_ledger(tipo="VENTA", cantidad=-qty, ref="ORD-id")
+        # [DSC019 - Mensaje 11] CTR_POS -> CE_Inventario: 11: insert_ledger(tipo=VENTA, cantidad=-N, ref=ORD-880)
         db.add(InventoryLedger(
             branch_id=data.branch_id,
             variant_id=var_id,
@@ -641,8 +580,12 @@ def process_checkout(
             unit_cost=float(inv.avg_cost or 0),
             reference_id=order_ref,
         ))
+        # [DSC018 - Mensaje 14] CE_Kardex -->> CTR_Ventas: 14: asiento_registrado
+        # [DSC019 - Mensaje 12] CE_Inventario -->> CTR_POS: 12: asiento_kardex_registrado
 
-    # [CU18 - Paso 7] / [DSC018 - Paso 7] +6. execute_polymorphic_payment(payment_type) / [CU19 - Paso 9] +6. insert_payment
+    # [DSC019 - Mensaje 13] CTR_POS -> CTR_POS: 13: calcularCambio(recibido=250.00, total=200.00) -> vuelto=50.00
+    # [DSC019 - Mensaje 14] CTR_POS -> CE_Pago: 14: insert_payment(orden_id=880, metodo="EFECTIVO", recibido, cambio)
+    # [DSC018 - Mensaje 15] CTR_Ventas -> CE_Pago: 15: insert_payment(order_id, metodo_pago, monto, status="CONFIRMADO")
     p_type = data.payment_type
     if p_type == "EFECTIVO":
         cash_rec = data.cash_payment.cash_received if data.cash_payment else total_amount
@@ -678,8 +621,9 @@ def process_checkout(
     elif p_type == "PAYPAL":
         if not data.paypal_payment:
             raise HTTPException(status_code=400, detail="Faltan los datos de la transacción de PayPal.")
-        # Verificación lado servidor: el pedido solo se registra si PayPal confirma el cobro.
+        # [DSC018 - Mensaje 15a] CTR_Ventas -> PAS_PayPal: 15a: verify_completed_order(paypal_order_id, total)
         paypal_service.verify_completed_order(data.paypal_payment.paypal_order_id, float(total_amount))
+        # [DSC018 - Mensaje 15b] PAS_PayPal -->> CTR_Ventas: 15b: pago_verificado
         paypal_ref = f"PAYPAL:{data.paypal_payment.paypal_order_id}"
         payment = PayPalPayment(
             order_id=order.id,
@@ -701,6 +645,8 @@ def process_checkout(
         raise HTTPException(status_code=400, detail=f"Medio de pago {p_type} no soportado.")
 
     db.add(payment)
+    # [DSC019 - Mensaje 15] CE_Pago -->> CTR_POS: 15: pago_id = 741
+    # [DSC018 - Mensaje 16] CE_Pago -->> CTR_Ventas: 16: payment_id
 
     tax_rate = 0.130
     # [CU20 - Paso 2] / [DSC020 - Paso 2] +7. calculate_tax_iva_13(total_amount)
@@ -711,8 +657,9 @@ def process_checkout(
         control_code = f"{uuid.uuid4().hex[:2]}-{uuid.uuid4().hex[2:4]}-{uuid.uuid4().hex[4:6]}-{uuid.uuid4().hex[6:8]}".upper()
     # [CU20 - alt: Venta sin NIT o interna -> NOTA DE ENTREGA sin código de control]
 
-    # [CU18 - Paso 8] / [DSC018 - Paso 8] +7. issue_invoice(order_id, nit, total) -> CE_Factura con IVA 13% y código de control (CU20)
-    # [CU19 - Paso 11] / [DSC019 - Paso 11] +8. issue_invoice(order_id, nit, total) / [CU20 - Paso 4] +8. insert(Invoice)
+    # [DSC019 - Mensaje 16] CTR_POS -> CE_Factura: 16: insert_invoice(orden_id=880, doc_type=FACTURA, nit_ci, total=200.00, iva_13=26.00)
+    # [DSC018 - Mensaje 17] CTR_Ventas -> CE_Factura: 17: insert_invoice(order_id, doc_type, subtotal, iva_13, control_code)
+    # [CU20 - Paso 4] insert(Invoice)
     invoice = Invoice(
         order_id=order.id,
         doc_type=data.doc_type,
@@ -725,27 +672,28 @@ def process_checkout(
         customer_name=data.customer_name.strip() if data.customer_name else f"{current_user.first_name} {current_user.last_name}".strip(),
     )
     db.add(invoice)
-    # [CU20 - Paso 5] / [DSC020 - Paso 5] +9. invoice_persisted()
+    # [DSC019 - Mensaje 17] CE_Factura -->> CTR_POS: 17: factura Invoice(id=512, codigo_control)
+    # [DSC018 - Mensaje 18] CE_Factura -->> CTR_Ventas: 18: invoice_id
 
-    # [CU18 - Paso 9] / [DSC018 - Paso 9] +8. notificar_confirmacion_pedido_push(user_id, order_id)
-    # [CU18 - Paso 10] / [DSC018 - Paso 10] +9. clear_cart_items_and_dispatch(user_id)
     if data.channel == "ONLINE":
+        # [DSC018 - Mensaje 19] CTR_Ventas -> CE_Carrito: 19: clear_cart_items(user_id)
         cart = db.query(Cart).filter(Cart.user_id == current_user.id).first()
         if cart:
             db.query(CartItem).filter(CartItem.cart_id == cart.id).delete()
+        # [DSC018 - Mensaje 20] CTR_Ventas -> CTR_Notificaciones: 20: notificar(user_id, "Compra confirmada", order_id)
         notificar(
             db, current_user.id,
             f"Compra confirmada {_numero_orden(order)}",
             f"Recibimos tu pago de Bs. {total_amount:.2f} ({p_type}). Tu pedido se preparará en {branch.name}.",
             TIPO_PEDIDO, order.id, "ORDER",
         )
+        # [DSC018 - Mensaje 21] CTR_Notificaciones -->> CTR_Ventas: 21: notificacion_enviada
 
-        # Si el método es DELIVERY (o no es retiro en sucursal explícito), se genera la orden de despacho
-        # para que aparezca inmediatamente en la bolsa de pedidos de los repartidores (CU29, CU30)
         if data.shipping_method != "PICKUP":
             from app.packages.paquete_envios_y_logistica.models import Shipment, ShipmentTrackingEvent
             from app.packages.paquete_envios_y_logistica.routers import avisar_envio
 
+            # [DSC018 - Mensaje 22] [opt: DELIVERY] CTR_Ventas -> CE_Envio: 22: insert_shipment(order_id, tracking_number, status="PENDING_DISPATCH")
             tracking_num = f"TRK-{uuid.uuid4().hex[:8].upper()}"
             address = (data.delivery_address or "Dirección indicada por el cliente").strip()
             rec_name = (data.recipient_name or data.customer_name or f"{current_user.first_name} {current_user.last_name}").strip()
@@ -769,6 +717,7 @@ def process_checkout(
             )
             db.add(shipment)
             db.flush()
+            # [DSC018 - Mensaje 23] CE_Envio -->> CTR_Ventas: 23: shipment_id
 
             initial_event = ShipmentTrackingEvent(
                 shipment_id=shipment.id,
@@ -785,12 +734,15 @@ def process_checkout(
     db.commit()
     db.refresh(order)
 
-    # [CU19 - Paso 15] / [DSC019 - Paso 15] +11. print_receipt(raw_thermal_data) / log_event
+    # [Auditoría transaccional] log_event
     log_event(db, current_user.id, "INSERT", "orders", order.id,
               {"channel": data.channel, "total": total_amount, "doc_type": data.doc_type},
               request.client.host)
 
-    # [CU19 - Paso 17] / [DSC019 - Paso 17] +12. HTTP 200 OK (order_id, change) / mostrarCambioYConfirmacion
+    # [DSC019 - Mensaje 18] CTR_POS -->> IU_POS: 18: HTTP 201 Created OrderResponse(orden_id=880, factura_id=512, cambio=50.00)
+    # [DSC019 - Mensaje 19] IU_POS -->> Cajero: 19: mostrarResumenVuelto(vuelto=50.00)
+    # [DSC018 - Mensaje 24] CTR_Ventas -->> IU_Checkout: 24: HTTP 201 Created OrderResponse(order_id, invoice, delivery_type, pickup_deadline)
+    # [DSC018 - Mensaje 25] IU_Checkout -->> Cliente: 25: renderizarConfirmacionPedido()
     return _build_order_response(db, order)
 
 
@@ -1469,9 +1421,26 @@ def get_my_returns(
     return result
 
 
-# [CU22 - Paso 1] (IU) El cliente presenta ticket u orden para devolución/cambio en IU_Devoluciones
+# =========================================================================================================
+# CU22 / DSC022: GESTIÓN DE DEVOLUCIONES Y CAMBIOS DE PRENDAS (UML 2.5)
+# Diagrama de Secuencia Canónico: Búsqueda de Factura, Validación de Garantía y 3 Acciones Posibles
+# Participantes:
+#   - Cajero_Encargado (Actor)
+#   - IU_Gestion_Devoluciones (IU)
+#   - CTR_Devoluciones_Y_Cambios (CTR)
+#   - Entidad_Factura (CE_F)
+#   - Entidad_Orden (CE_O)
+#   - Entidad_Inventario (CE_I)
+#   - Entidad_OrdenDevolucion (CE_OD)
+#   - Entidad_NotaCredito (CE_NC)
+#   - Entidad_Sesion (CE_S)
+# =========================================================================================================
+
+# ---------------------------------------------------------------------------------------------------------
+# FASE 2: Procesamiento de la Devolución o Cambio según Acción Seleccionada (Mensajes 7 al 16)
+# ---------------------------------------------------------------------------------------------------------
+# [DSC022 - Mensaje 8] IU_Gestion_Devoluciones -> CTR_Devoluciones_Y_Cambios: POST /api/v1/sales/returns
 @router.post("/returns", response_model=OrderReturnResponse, status_code=201)
-# [CU22 - Paso 2] / [DSC022 - Paso 2] +1. process_order_return(order_id, items, return_type)
 def process_order_return(
     data: OrderReturnCreate,
     request: Request,
@@ -1480,32 +1449,27 @@ def process_order_return(
     scope: BranchScope = Depends(get_branch_scope),
 ):
     """
-    [CU22: Procesar Cambios y Devoluciones de Prendas]
+    [CU22 / DSC022: Procesar Cambios y Devoluciones de Prendas]
     
-    Diagrama de Secuencia y Arquitectura de Análisis BCE:
-      - Actor: Encargado de Sucursal / Supervisor de Post-Venta
-      - Boundary: IU_GestionDevoluciones (Formulario de Cambios y Devoluciones)
-      - Control: CTR_Devoluciones (POST /api/v1/sales/returns)
-      - Entity: CE_Orden (Orden original de compra facturada)
-      - Entity: CE_Devolucion (Modelo OrderReturn - Registro formal del trámite de cambio o devolución)
-      - Entity: CE_DetalleDevolucion (Modelo OrderReturnItem - Prendas devueltas y prendas sustitutas)
-      - Entity: CE_Inventario (Ajuste de existencias: reingreso de devuelta y salida de reemplazo)
-      - Entity: CE_InventoryLedger (Kardex: 'DEVOLUCION_STOCK' y 'SALIDA_CAMBIO')
-      - Entity: CE_NotaDeCredito (Modelo CreditNote - Emisión de saldo a favor ante diferencia negativa)
-      - Entity: CE_NotificacionPush (Aviso formal al cliente con comprobante del trámite)
+    Diagrama de Secuencia y Arquitectura BCE:
+      - Actor: Cajero_Encargado
+      - Boundary: IU_Gestion_Devoluciones (Formulario de Cambios y Devoluciones)
+      - Control: CTR_Devoluciones_Y_Cambios (POST /api/v1/sales/returns)
+      - Entity: Entidad_Orden (Orden original de compra facturada)
+      - Entity: Entidad_OrdenDevolucion (Modelo OrderReturn y OrderReturnItem)
+      - Entity: Entidad_Inventario (Ajuste de existencias: reingreso y salida)
+      - Entity: Entidad_NotaCredito (Modelo CreditNote - Emisión de saldo a favor, cero efectivo)
+      - Entity: Entidad_Sesion (Cobro de diferencia en caja cuando la prenda nueva es de mayor valor)
 
     Reglas de Negocio Estrictas:
       1. Plazo Máximo de Garantía de 14 Días (2 Semanas):
-         - Solo se admiten solicitudes si (fecha_actual - fecha_compra) <= 14 días calendario.
-         - Si se exceden los 14 días, el sistema rechaza la operación con código HTTP 400.
-      2. Tipos de Operación y Tratamiento Financiero:
-         - CAMBIO_TALLA: Cambio de talla de la misma prenda. Diferencia financiera: Bs. 0.00.
-         - CAMBIO_MODELO (Mayor Valor): La nueva prenda tiene precio superior. Se cobra la
-           diferencia exacta en caja o pasarela (diff_total > 0).
-         - CAMBIO_MODELO (Menor Valor): La nueva prenda tiene precio inferior. NO SE DEVUELVE
-           EFECTIVO. Se emite automáticamente una Nota de Crédito (CE_NotaDeCredito) a favor del
-           cliente con vigencia para futuras compras.
-         - DEVOLUCION_DINERO: Devolución definitiva sujeta a inspección de calidad y anulación de factura.
+         - delta_dias = NOW - fecha_compra. Si delta_dias > 14 -> Rechazo con HTTP 400 Bad Request.
+      2. Acciones Seleccionadas:
+         - CAMBIO POR TALLA (Mismo Modelo / Mismo SKU): Diferencia financiera Bs. 0.00.
+         - CAMBIO POR MODELO:
+             * Prenda más cara: Cobro de la diferencia en caja (diff_total > 0).
+             * Prenda más barata: Emisión obligatoria de Nota de Crédito (cero devolución en efectivo).
+         - DEVOLUCIÓN DEFINITIVA: Reingreso a inventario y emisión de Nota de Crédito por el monto total.
     """
     order = db.query(Order).filter(Order.id == data.order_id).first()
     if not order:
@@ -1513,17 +1477,18 @@ def process_order_return(
     if not scope.is_central and order.branch_id != scope.branch_id:
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
 
-    # [CU22 - Paso 3] / [DSC022 - Paso 3] +2. validar_plazo_maximo_14_dias(order.created_at)
+    # Validación de Plazo Derecho: delta_dias = NOW - fecha_compra
     if order.created_at:
         now_utc = datetime.now(timezone.utc)
         order_time = order.created_at
         if order_time.tzinfo is None:
             order_time = order_time.replace(tzinfo=timezone.utc)
         diff_days = (now_utc - order_time).days
+        # [DSC022 - Mensaje 5a / 6a] [alt: delta_dias > 14 dias (2 Semanas Vencidas)]
         if diff_days > 14:
             raise HTTPException(
                 status_code=400,
-                detail=f"Plazo de garantia vencido. La compra fue realizada hace {diff_days} dias (el {order.created_at.strftime('%d/%m/%Y')}). Por politica comercial de tienda, el plazo maximo para cambios o devoluciones es estrictamente de 14 dias (2 semanas) calendario."
+                detail=f"Plazo vencido: Han pasado más de 14 días (2 semanas) desde la compra (hace {diff_days} días). Garantía Expirada - No procede devolución ni cambio."
             )
 
     refund_total = 0.0
@@ -1540,8 +1505,17 @@ def process_order_return(
         if it.quantity > order_it.quantity:
             raise HTTPException(status_code=400, detail="La cantidad a devolver no puede superar la cantidad comprada.")
 
+        # =================================================================================================
+        # ACCIÓN C: DEVOLUCIÓN DEFINITIVA (Mensajes 7d y 8d)
+        # =================================================================================================
+        # [DSC022 - Mensaje 7d] Cajero_Encargado -> IU_Gestion_Devoluciones: solicitarDevolucion(var_id=14, motivo='Falla Fabrica')
+        # [DSC022 - Mensaje 8d] IU_Gestion_Devoluciones -> CTR_Devoluciones_Y_Cambios: POST /api/v1/sales/returns (tipo='DEVOLUCION_DINERO', var_id=14)
         if data.return_type == "DEVOLUCION_DINERO":
             refund_total += float(order_it.unit_price) * it.quantity
+
+        # =================================================================================================
+        # ACCIÓN A y B: CAMBIO POR TALLA / CAMBIO POR MODELO (Mensajes 7a/8a y 7b/8b)
+        # =================================================================================================
         elif data.return_type in ["CAMBIO_PRENDA", "CAMBIO_TALLA", "CAMBIO_MODELO"] and it.replacement_variant_id:
             orig_var = db.query(ProductVariant).filter(ProductVariant.id == it.variant_id).first()
             repl_var = db.query(ProductVariant).filter(ProductVariant.id == it.replacement_variant_id).first()
@@ -1554,16 +1528,18 @@ def process_order_return(
             orig_price = _get_product_effective_price(db, orig_p)
             repl_price = _get_product_effective_price(db, repl_p)
 
+            # [DSC022 - Mensaje 7a / 8a] Acción Seleccionada: CAMBIO POR TALLA (Mismo Modelo / Mismo SKU) -> diferencia = 0.00
             if data.return_type == "CAMBIO_TALLA" or orig_p.id == repl_p.id:
-                # Mismo modelo en diferente talla: diferencia es 0
                 pass
             else:
-                # Cambio por modelo: diferencia de precios
+                # [DSC022 - Mensaje 7b / 8b] Acción Seleccionada: CAMBIO POR MODELO (Diferente Prenda / Diferencia de Precio)
                 diff_unit = round(repl_price - orig_price, 2)
                 diff_total += round(diff_unit * it.quantity, 2)
 
-    # [CU22 - Paso 4] / [DSC022 - Paso 4] +3. emitir_nota_credito_si_menor_valor(diff_total)
-    # Si el nuevo modelo es de menor valor, emitir Nota de Credito por saldo a favor (cero efectivo)
+    # -----------------------------------------------------------------------------------------------------
+    # SUBFLUJO B.2: Precio Nuevo < Precio Antiguo (Prenda más barata - Emisión Obligatoria de Nota de Crédito)
+    # -----------------------------------------------------------------------------------------------------
+    # [DSC022 - Mensaje 11c] CTR_Devoluciones_Y_Cambios -> Entidad_NotaCredito: emitirNotaCredito(cliente_id, saldo_a_favor, motivo='CAMBIO_MODELO_MENOR_VALOR')
     if diff_total < 0:
         saldo_a_favor = round(abs(diff_total), 2)
         nc_code = f"NC-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
@@ -1577,11 +1553,39 @@ def process_order_return(
         )
         db.add(credit_note_obj)
         db.flush()
+        # [DSC022 - Mensaje 12c] Entidad_NotaCredito --> CTR_Devoluciones_Y_Cambios: codigo_nc = 'NC-2026-0045'
         price_diff_msg = f"Se emitio la Nota de Credito {nc_code} por Bs. {saldo_a_favor:.2f} a favor del cliente para su proxima compra."
+
+    # -----------------------------------------------------------------------------------------------------
+    # SUBFLUJO B.1: Precio Nuevo > Precio Antiguo (Prenda más cara - Cobro de Diferencia en Caja)
+    # -----------------------------------------------------------------------------------------------------
+    # [DSC022 - Mensaje 11b] CTR_Devoluciones_Y_Cambios -> Entidad_Sesion: cobrarDiferenciaVentaCaja(monto_diferencia)
+    # [DSC022 - Mensaje 12b] Entidad_Sesion --> CTR_Devoluciones_Y_Cambios: cobro_asentado
     elif diff_total > 0:
         price_diff_msg = f"Diferencia a cobrar en caja/pasarela: Bs. {diff_total:.2f}."
 
-    # [CU22 - Paso 5] / [DSC022 - Paso 5] +4. insert(order_return, status='APROBADA')
+    # -----------------------------------------------------------------------------------------------------
+    # SUBFLUJO C: DEVOLUCIÓN DEFINITIVA (Emisión de Nota de Crédito por el Valor Total)
+    # -----------------------------------------------------------------------------------------------------
+    elif data.return_type == "DEVOLUCION_DINERO":
+        # [DSC022 - Mensaje 11d] CTR_Devoluciones_Y_Cambios -> Entidad_NotaCredito: generarNotaCreditoDevolucion(datos.id, monto)
+        nc_code = f"NC-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
+        credit_note_obj = CreditNote(
+            credit_note_code=nc_code,
+            user_id=order.user_id,
+            order_id=order.id,
+            amount=round(refund_total, 2),
+            status="VIGENTE",
+            reason=f"Reembolso por devolución definitiva de orden {_numero_orden(order)}",
+        )
+        db.add(credit_note_obj)
+        db.flush()
+        # [DSC022 - Mensaje 12d] Entidad_NotaCredito --> CTR_Devoluciones_Y_Cambios: comprobante_emitido
+
+    # -----------------------------------------------------------------------------------------------------
+    # Registro en Entidad_OrdenDevolucion
+    # -----------------------------------------------------------------------------------------------------
+    # [DSC022 - Mensaje 11a / 13b / 13c] CTR_Devoluciones_Y_Cambios -> Entidad_OrdenDevolucion: registrarCambioDevolucion(...)
     ret_num = f"DEV-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
     order_ret = OrderReturn(
         return_number=ret_num,
@@ -1596,6 +1600,7 @@ def process_order_return(
     )
     db.add(order_ret)
     db.flush()
+    # [DSC022 - Mensaje 12a / 14b / 14c] Entidad_OrdenDevolucion --> CTR_Devoluciones_Y_Cambios: return_id = order_ret.id
 
     for it in data.items:
         db.add(OrderReturnItem(
@@ -1605,7 +1610,7 @@ def process_order_return(
             replacement_variant_id=it.replacement_variant_id,
         ))
 
-        # [CU22 - Paso 6] / [DSC022 - Paso 6] +5. reingresar_stock_al_inventario_y_registrar_ledger()
+        # [DSC022 - Mensaje 9a / 9b / 9d] CTR_Devoluciones_Y_Cambios -> Entidad_Inventario: reingresarStock(var_id, qty=+1)
         inv = db.query(Inventory).filter(
             Inventory.branch_id == order.branch_id,
             Inventory.variant_id == it.variant_id
@@ -1621,7 +1626,7 @@ def process_order_return(
                 reference_id=ret_num,
             ))
 
-        # Si es cambio, descontar la prenda de reemplazo
+        # [DSC022 - Mensaje 9a / 9b] CTR_Devoluciones_Y_Cambios -> Entidad_Inventario: descontarStock(var_nuevo, qty=-1)
         if data.return_type in ["CAMBIO_PRENDA", "CAMBIO_TALLA", "CAMBIO_MODELO"] and it.replacement_variant_id:
             repl_inv = db.query(Inventory).filter(
                 Inventory.branch_id == order.branch_id,
@@ -1639,7 +1644,7 @@ def process_order_return(
                 reference_id=ret_num,
             ))
 
-    # [CU22 - Paso 7] / [DSC022 - Paso 7] +6. notificar_resolucion_cambio_o_devolucion()
+    # [DSC022 - Mensaje 10a / 10b / 10d] Entidad_Inventario --> CTR_Devoluciones_Y_Cambios: inventario_actualizado_ok / stock_ajustado
     tipo_texto = "Devolucion de dinero" if data.return_type == "DEVOLUCION_DINERO" else ("Cambio por talla" if data.return_type == "CAMBIO_TALLA" else ("Cambio por modelo" if data.return_type == "CAMBIO_MODELO" else "Cambio de prenda"))
     detalle = f" Reembolso: Bs. {refund_total:.2f}." if data.return_type == "DEVOLUCION_DINERO" else (f" {price_diff_msg}" if price_diff_msg else "")
     notificar(
@@ -1654,6 +1659,8 @@ def process_order_return(
               {"return_number": order_ret.return_number, "order_id": order.id, "type": data.return_type},
               request.client.host)
 
+    # [DSC022 - Mensaje 13a / 15b / 15c / 13d] CTR_Devoluciones_Y_Cambios --> IU_Gestion_Devoluciones: confirmación / respuesta
+    # [DSC022 - Mensaje 14a / 16b / 16c / 14d] IU_Gestion_Devoluciones --> Cajero_Encargado: comprobante finalizado / entrega de prenda / nota de crédito
     return OrderReturnResponse(
         id=order_ret.id,
         return_number=order_ret.return_number,
@@ -1670,11 +1677,22 @@ def process_order_return(
 
 
 # ==============================================================================================
-# ENDPOINTS PARA BUSQUEDA DE FACTURA (14 DIAS), TIMEOUT PASARELA 5M Y CUSTODIA RETIRO 48H (CU18, CU22)
+# FASE 1: BÚSQUEDA Y VALIDACIÓN DE FACTURA (14 DÍAS DE GARANTÍA) [Mensajes 1 al 6]
 # ==============================================================================================
 
-# [CU22 - Paso 1] (IU) El cliente o personal ingresa código de factura o número de orden en IU_Devoluciones
-# [CU22 - Paso 1.1] / [DSC022 - Paso 1.1] +1. lookup_invoice_by_code(invoice_code)
+# [DSC022 - Mensaje 1] Cajero_Encargado -> IU_Gestion_Devoluciones: ingresarCodigoFactura(codigo_factura='FAC-10024')
+# [DSC022 - Mensaje 2] IU_Gestion_Devoluciones -> CTR_Devoluciones_Y_Cambios: GET /api/v1/sales/returns/lookup-invoice?codigo=FAC-10024
+@router.get("/returns/lookup-invoice", response_model=InvoiceLookupResponse)
+def lookup_invoice_query(
+    codigo: str = Query(..., description="Código de factura o número de orden"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """[CU22 / DSC022 - Mensaje 2] Búsqueda de factura por parámetro query 'codigo'."""
+    return lookup_invoice_by_code(codigo, db, current_user)
+
+
+# [DSC022 - Mensaje 2 (variante REST de ruta)] GET /api/v1/sales/invoices/by-code/{invoice_code}
 @router.get("/invoices/by-code/{invoice_code}", response_model=InvoiceLookupResponse)
 def lookup_invoice_by_code(
     invoice_code: str,
@@ -1682,19 +1700,7 @@ def lookup_invoice_by_code(
     current_user: User = Depends(get_current_user),
 ):
     """
-    [CU22 - Paso 1: Búsqueda y Validación de Factura para Devolución o Cambio]
-    
-    Diagrama de Secuencia y Análisis BCE:
-      - Actor: Encargado de Sucursal / Cajero de Atención al Cliente
-      - Boundary: IU_GestionDevoluciones (Módulo de Post-Venta y Devoluciones)
-      - Control: CTR_Devoluciones (GET /api/v1/sales/invoices/by-code/{invoice_code})
-      - Entity: CE_Factura (Modelo Invoice - Búsqueda por ID, FAC-XXXXX, control_code o número ORD-XXXXX)
-      - Entity: CE_Orden / CE_DetalleOrden (Recuperación de prendas adquiridas, precios y fecha de emisión)
-      
-    Regla de Garantía Estricta:
-      - Plazo máximo de 14 días calendario (2 semanas) a partir de la emisión de la factura.
-      - Retorna indicador booleano `warranty_valid` (True si días transcurridos <= 14, False si > 14)
-        junto con el detalle pormenorizado de prendas, tallas, colores y montos facturados.
+    [CU22 / DSC022 - Mensajes 1 al 6: Búsqueda y Validación de Factura para Devolución o Cambio]
     """
     code_clean = invoice_code.strip()
     invoice = None
@@ -1717,6 +1723,7 @@ def lookup_invoice_by_code(
     if not invoice:
         raise HTTPException(status_code=404, detail=f"No se encontro factura con el codigo '{invoice_code}'.")
 
+    # [DSC022 - Mensaje 3] CTR_Devoluciones_Y_Cambios -> Entidad_Factura / Entidad_Orden: buscarFacturaConItems(codigo_factura)
     order = db.query(Order).filter(Order.id == invoice.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden asociada a la factura no encontrada.")
@@ -1724,8 +1731,8 @@ def lookup_invoice_by_code(
     branch = db.query(Branch).filter(Branch.id == order.branch_id).first()
     branch_name = branch.name if branch else f"Sucursal #{order.branch_id}"
 
-    # [CU22 - Paso 1.2] / [DSC022 - Paso 1.2] +2. select_invoice_and_order(invoice_code)
-    # [CU22 - Paso 1.3] / [DSC022 - Paso 1.3] +3. validar_plazo_garantia_14_dias(order.created_at)
+    # [DSC022 - Mensaje 4] Entidad_Factura --> CTR_Devoluciones_Y_Cambios: {factura_id, orden_id, fecha, items}
+    # Validación de Plazo Derecho: delta_dias = NOW - fecha_compra
     now_utc = datetime.now(timezone.utc)
     order_time = order.created_at
     if order_time.tzinfo is None:
@@ -1734,6 +1741,11 @@ def lookup_invoice_by_code(
 
     warranty_limit = 14
     warranty_valid = days_diff <= warranty_limit
+
+    # [DSC022 - Mensaje 5a / 6a] [alt: delta_dias > 14 dias (2 Semanas Vencidas)]
+    #   CTR -->> IU: Plazo vencido (Garantía Expirada - No procede devolución ni cambio)
+    # [DSC022 - Mensaje 5b / 6b] [else: delta_dias <= 14 dias (Garantía Vigente 2 Semanas)]
+    #   CTR -->> IU: HTTP 200 OK con items_factura, garantia_valida=true y dias_restantes
     if warranty_valid:
         days_left = warranty_limit - days_diff
         warranty_msg = f"Garantia vigente. Quedan {days_left} dias de los 14 permitidos (2 semanas) para cambios o devoluciones."
@@ -1769,7 +1781,6 @@ def lookup_invoice_by_code(
 
     inv_display_code = f"FAC-{invoice.id:05d}" if not invoice.control_code else f"FAC-{invoice.id:05d} ({invoice.control_code})"
 
-    # [CU22 - Paso 1.4] / [DSC022 - Paso 1.4] +4. Retornar prendas facturadas y vigencia de garantía (HTTP 200 OK)
     return InvoiceLookupResponse(
         invoice_id=invoice.id,
         invoice_code=inv_display_code,

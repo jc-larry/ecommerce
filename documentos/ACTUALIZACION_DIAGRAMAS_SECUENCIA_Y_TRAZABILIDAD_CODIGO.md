@@ -68,14 +68,14 @@ La siguiente tabla resume el estado auditado de los 40 Casos de Uso.
 | **CU12** | `DSC012` | Búsqueda facetada y stock por sucursales | `paquete_catalogo_y_tiendas` | 1..8 | Sí | 0 | 100% numeradas |
 | **CU13** | `DSC013` | Gestión de cupones y promociones | `paquete_ventas_y_pagos` | 1..8 | Sí | 0 | 100% numeradas |
 | **CU14** | `DSC014` | Valoración, reseñas y lista de deseos | `paquete_catalogo_y_tiendas` | 1..13 | Sí | 0 | 100% numeradas |
-| **CU15** | `DSC015` | Transferencia de mercadería inter-sucursal | `paquete_inventario_y_proveedores/merchandise` | 1..9 | Sí | 0 | 100% numeradas |
+| **CU15** | `DSC015` | Transferencia de mercadería inter-sucursal | `paquete_inventario_y_proveedores/merchandise` | 1..28 | Sí | 0 | 100% numeradas |
 | **CU16** | `DSC016` | Alertas de stock mínimo y máximo | `paquete_inventario_y_proveedores/merchandise` | 1..12 | Sí | 0 | 100% numeradas |
 | **CU17** | `DSC017` | Gestión de carrito de compra digital | `paquete_ventas_y_pagos` | 1..10 | Sí | 0 | 100% numeradas |
 | **CU18** | `DSC018` | Venta digital / Checkout (Tienda vs. Delivery + Pasarela) | `paquete_ventas_y_pagos` | 1..11 | Sí | 0 | 100% numeradas |
 | **CU19** | `DSC019` | Venta presencial en mostrador POS | `paquete_ventas_y_pagos` | 1..18 | Sí | 0 | 100% numeradas |
 | **CU20** | `DSC020` | Emisión y generación de factura PDF (IVA 13%) | `paquete_ventas_y_pagos` | 1..5 | Sí | 0 | 100% numeradas |
 | **CU21** | `DSC021` | Generar cotización formal en PDF | `paquete_ventas_y_pagos` | 1..9 | Sí | 0 | 100% numeradas |
-| **CU22** | `DSC022` | Devolución de mercadería y garantías | `paquete_ventas_y_pagos` | 1..6 | Sí | 0 | 100% numeradas |
+| **CU22** | `DSC022` | Devolución de mercadería y garantías | `paquete_ventas_y_pagos` | 1..16 | Sí | 0 | 100% numeradas |
 | **CU23** | `DSC023` | Apertura, arqueo y cierre de caja/turno | `paquete_ventas_y_pagos` | 1..9 | Sí | 0 | 100% numeradas |
 | **CU24** | `DSC024` | Historial y seguimiento de compras | `paquete_ventas_y_pagos` | 1..6 | Sí | 0 | 100% numeradas |
 | **CU25** | `DSC025` | Conversión de reserva a venta POS en tienda | `paquete_reservas_y_citas` | 1..7 | Sí | 0 | 100% numeradas |

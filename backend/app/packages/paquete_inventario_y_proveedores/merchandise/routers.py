@@ -48,9 +48,9 @@ REASON_LABELS = {
     "SOBRANTE_INVENTARIO": "Sobrante en conteo físico (Excedente)",
 }
 
-# [CU10 - Paso 1] (IU) Encargado ingresa datos de remisión y detalle de compra en IU_Merchandise
+# [DSC010 - Mensaje 1] Encargado -> IU_Ingreso: 1: registrarLoteIngreso(proveedor_id, sucursal_id, nro_factura, items)
+# [DSC010 - Mensaje 2] IU_Ingreso -> CTR_Compras: 2: POST /api/v1/merchandise/intake (PurchaseOrderCreate)
 @router.post("/intake", response_model=PurchaseOrderResponse, status_code=status.HTTP_201_CREATED)
-# [CU10 - Paso 2] / [DSC010 - Paso 2] +1. register_merchandise_intake(datos)
 def register_merchandise_intake(
     intake_data: PurchaseOrderCreate,
     request: Request,
@@ -58,8 +58,9 @@ def register_merchandise_intake(
     current_user: User = Depends(staff_check)
 ):
     """[CU10] Registra compras a proveedores con cálculo de Costo Promedio Ponderado (CPP) y prorrateo de flete."""
-    # [CU10 - Paso 3] / [DSC010 - Paso 3] CTR_Inventory -> CE_Proveedor: +2. check_relations(proveedor_id, sucursal_id)
+    # [DSC010 - Mensaje 3] CTR_Compras -> CE_Proveedor: 3: find_by_id(proveedor_id)
     supplier = db.query(Supplier).filter(Supplier.id == intake_data.supplier_id).first()
+    # [DSC010 - Mensaje 4] CE_Proveedor -->> CTR_Compras: 4: Supplier(id=12, razon_social="Textiles Andinos S.A.")
     if not supplier:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado.")
         
@@ -70,12 +71,12 @@ def register_merchandise_intake(
     if not intake_data.details:
         raise HTTPException(status_code=400, detail="El ingreso debe contener al menos un producto.")
 
-    # 1. Prorrateo contable de flete / costo landed
+    # [DSC010 - Mensaje 5] CTR_Compras -> CTR_Compras: 5: prorratearCostoLanded(shipping_cost, raw_subtotal)
     shipping = float(intake_data.shipping_cost or 0.0)
     raw_subtotal = sum(item.quantity * item.unit_cost for item in intake_data.details)
     freight_factor = (shipping / raw_subtotal) if (shipping > 0 and raw_subtotal > 0) else 0.0
 
-    # [CU10 - Paso 4] / [DSC010 - Paso 4] CTR_Inventory -> CE_Compra: +3. insert_purchase(cabecera)
+    # [DSC010 - Mensaje 6] CTR_Compras -> CE_Compra: 6: create_purchase_order(proveedor_id, sucursal_id, status='COMPLETADO', nro_factura, total)
     purchase = PurchaseOrder(
         supplier_id=intake_data.supplier_id,
         branch_id=intake_data.branch_id,
@@ -87,11 +88,11 @@ def register_merchandise_intake(
     )
     db.add(purchase)
     db.flush()
-    # [CU10 - Paso 5] / [DSC010 - Paso 5] CE_Compra -->> CTR_Inventory: ID Compra
+    # [DSC010 - Mensaje 7] CE_Compra -->> CTR_Compras: 7: compra PurchaseOrder(id=140)
 
     total_value = 0.0
 
-    # [CU10 - Paso 6] / [DSC010 - Paso 6] [loop: Por cada detalle] CTR_Inventory -> CE_Compra: +4. insert_detail(detalle)
+    # Loop de procesamiento: Se itera cada variante ingresada en el lote
     for item in intake_data.details:
         variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
         if not variant:
@@ -101,16 +102,18 @@ def register_merchandise_intake(
         landed_unit_cost = round(item.unit_cost * (1.0 + freight_factor), 2)
         total_value += (item.quantity * landed_unit_cost)
 
-        # [CU10 - Paso 8] / [DSC010 - Paso 8] [loop: Por cada detalle] CTR_Inventory -> CE_Inventario: +5. increment_stock(detalle)
+        # [DSC010 - Mensaje 10] CTR_Compras -> CE_Inventario: 10: get_stock_and_cpp(sucursal_id, variante_id)
         stock_record = db.query(Inventory).filter(
             Inventory.branch_id == purchase.branch_id,
             Inventory.variant_id == item.variant_id
         ).first()
 
+        # [DSC010 - Mensaje 11] CE_Inventario -->> CTR_Compras: 11: StockActual(stock_previo=20, cpp_previo=100.00)
         previous_avg = float(stock_record.avg_cost or 0.0) if stock_record else 0.0
         stock_previo = stock_record.stock_actual if stock_record else 0
         nuevo_stock = stock_previo + item.quantity
 
+        # [DSC010 - Mensaje 12] CTR_Compras -> CTR_Compras: 12: calcularNuevoCPP(stock_prev, cpp_prev, cant_nueva, costo_landed) -> nuevo_cpp
         if not stock_record:
             # Primer ingreso de esta variante
             new_avg = landed_unit_cost
@@ -131,10 +134,12 @@ def register_merchandise_intake(
                 )
             else:
                 new_avg = landed_unit_cost
+            # [DSC010 - Mensaje 13] CTR_Compras -> CE_Inventario: 13: update_inventory(sucursal_id, variante_id, stock_adicional, nuevo_cpp)
             stock_record.avg_cost = new_avg
             stock_record.stock_actual = nuevo_stock
+            # [DSC010 - Mensaje 14] CE_Inventario -->> CTR_Compras: 14: Inventory(stock_total=30, cpp=110.00)
 
-        # Detalle de compra con auditoría de cambio en CPP
+        # [DSC010 - Mensaje 8] CTR_Compras -> CE_Compra: 8: add_item(compra_id=140, variante_id, cantidad, costo_unitario)
         detail = PurchaseDetail(
             purchase_order_id=purchase.id,
             variant_id=item.variant_id,
@@ -144,8 +149,9 @@ def register_merchandise_intake(
             new_avg_cost=new_avg,
         )
         db.add(detail)
+        # [DSC010 - Mensaje 9] CE_Compra -->> CTR_Compras: 9: ItemCompra(id=811)
 
-        # Entrada en el libro diario de inventario (Kárdex)
+        # [DSC010 - Mensaje 15] CTR_Compras -> CE_Kardex: 15: registrarMovimiento(tipo='INGRESO', ref="FACT-{nro_factura}", cantidad=+qty, costo_unit)
         ref_doc = f"FACT-{purchase.invoice_number}" if purchase.invoice_number else f"OC-{purchase.id}"
         ledger = InventoryLedger(
             branch_id=purchase.branch_id,
@@ -156,6 +162,7 @@ def register_merchandise_intake(
             reference_id=ref_doc
         )
         db.add(ledger)
+        # [DSC010 - Mensaje 16] CE_Kardex -->> CTR_Compras: 16: AsientoKardex(id=9452)
 
     db.commit()
     db.refresh(purchase)
@@ -166,7 +173,8 @@ def register_merchandise_intake(
          "invoice_number": purchase.invoice_number, "total_value": total_value}, 
         request.client.host
     )
-    # [CU10 - Paso 10] / [DSC010 - Paso 10] CTR_Inventory -->> IU_Merchandise: HTTP 201 Created (Ingreso Completado)
+    # [DSC010 - Mensaje 17] CTR_Compras -->> IU_Ingreso: 17: HTTP 201 Created PurchaseOrderResponse(compra_id=140, status='COMPLETADO')
+    # [DSC010 - Mensaje 18] IU_Ingreso -->> Encargado: 18: renderizarComprobanteIngresoConKardexActualizado()
     return purchase
 
 
@@ -466,9 +474,24 @@ def _build_transfer_response(db: Session, trf: StockTransfer) -> StockTransferRe
     )
 
 
-# [CU15 - Paso 1] (IU) Encargado solicita transferencia de stock entre sucursales en IU_Transferencias
+# =========================================================================================================
+# CU15 / DSC015: GESTIÓN DE INVENTARIO Y TRANSFERENCIAS ENTRE SUCURSALES (UML 2.5)
+# Diagrama de Secuencia Canónico: 3 Fases y 28 Mensajes
+# Participantes:
+#   - Encargado Sucursal Origen / Destino
+#   - Interfaz_Gestion_Inventario (IU)
+#   - Controlador_Traspasos_Inventario (CTR)
+#   - Entidad_Inventario_Sucursal (CE_I)
+#   - Entidad_Kardex_Movimientos (CE_K)
+#   - Entidad_Traspaso_Mercaderia (CE_T)
+# =========================================================================================================
+
+# ---------------------------------------------------------------------------------------------------------
+# FASE 1: Solicitud de Traspaso Inter-Sucursal (Mensajes 1 al 8)
+# ---------------------------------------------------------------------------------------------------------
+# [DSC015 - Mensaje 1] Encargado Sucursal Origen -> Interfaz_Gestion_Inventario: solicitarTraspaso(sucursal_origen, sucursal_destino, lista_prendas, cantidades)
+# [DSC015 - Mensaje 2] Interfaz_Gestion_Inventario -> Controlador_Traspasos_Inventario: registrarSolicitudTraspaso(datos_traspaso)
 @router.post("/transfers", response_model=StockTransferResponse, status_code=201)
-# [CU15 - Paso 2] / [DSC015 - Paso 2] +1. create_stock_transfer(origen_id, destino_id, items)
 def create_stock_transfer(
     data: StockTransferCreate,
     request: Request,
@@ -476,7 +499,7 @@ def create_stock_transfer(
     current_user: User = Depends(staff_check),
     scope: BranchScope = Depends(get_branch_scope),
 ):
-    """[CU15] Crea una solicitud de transferencia de inventario entre sucursales."""
+    """[CU15 / DSC015 - Fase 1] Crea una solicitud de transferencia de inventario entre sucursales."""
     if not scope.is_central:
         # Un ENCARGADO/CAJERO solo puede originar transferencias desde su propia sucursal;
         # el destino sí puede ser cualquier otra sucursal de la cadena.
@@ -484,7 +507,6 @@ def create_stock_transfer(
     if data.origin_branch_id == data.destination_branch_id:
         raise HTTPException(status_code=400, detail="La sucursal de origen y destino no pueden ser la misma.")
 
-    # [CU15 - Paso 3] / [DSC015 - Paso 3] +2. check_branches_and_variants()
     origin = db.query(Branch).filter(Branch.id == data.origin_branch_id).first()
     dest = db.query(Branch).filter(Branch.id == data.destination_branch_id).first()
     if not origin or not dest:
@@ -493,7 +515,24 @@ def create_stock_transfer(
     if not data.details:
         raise HTTPException(status_code=400, detail="La transferencia debe contener al menos un producto.")
 
-    # [CU15 - Paso 4] / [DSC015 - Paso 4] +3. insert(stock_transfer, status='SOLICITADA')
+    # [DSC015 - Mensaje 3] Controlador_Traspasos_Inventario -> Entidad_Inventario_Sucursal: verificarStockDisponible(sucursal_origen, prendas)
+    for item in data.details:
+        if not db.query(ProductVariant.id).filter(ProductVariant.id == item.variant_id).first():
+            raise HTTPException(status_code=404, detail=f"Variante {item.variant_id} no encontrada.")
+        inv_check = db.query(Inventory).filter(
+            Inventory.branch_id == data.origin_branch_id,
+            Inventory.variant_id == item.variant_id
+        ).first()
+        if not inv_check or inv_check.stock_actual < item.quantity:
+            current_stk = inv_check.stock_actual if inv_check else 0
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stock insuficiente en origen para variante {item.variant_id} (Disponible: {current_stk}, Requerido: {item.quantity})."
+            )
+
+    # [DSC015 - Mensaje 4] Entidad_Inventario_Sucursal --> Controlador_Traspasos_Inventario: stock_suficiente_confirmado
+
+    # [DSC015 - Mensaje 5] Controlador_Traspasos_Inventario -> Entidad_Traspaso_Mercaderia: crearRegistroTraspaso(estado="SOLICITADA", codigo="TRF-2026-001")
     transfer_num = f"TRF-{datetime.now().year}-{uuid.uuid4().hex[:6].upper()}"
     trf = StockTransfer(
         transfer_number=transfer_num,
@@ -506,10 +545,7 @@ def create_stock_transfer(
     db.add(trf)
     db.flush()
 
-    # [CU15 - Paso 5] / [DSC015 - Paso 5] [loop: Por cada variante/detalle] +4. insert(transfer_details)
     for item in data.details:
-        if not db.query(ProductVariant.id).filter(ProductVariant.id == item.variant_id).first():
-            raise HTTPException(status_code=404, detail=f"Variante {item.variant_id} no encontrada.")
         detail = StockTransferDetail(
             transfer_id=trf.id,
             variant_id=item.variant_id,
@@ -520,11 +556,13 @@ def create_stock_transfer(
     db.commit()
     db.refresh(trf)
 
-    # [CU15 - Paso 6] / [DSC015 - Paso 6] +5. log_event(transfer) y confirmación
+    # [DSC015 - Mensaje 6] Entidad_Traspaso_Mercaderia --> Controlador_Traspasos_Inventario: traspaso_id = 101
     log_event(db, current_user.id, "INSERT", "stock_transfers", trf.id,
               {"transfer_number": trf.transfer_number, "origin_id": origin.id, "dest_id": dest.id},
               request.client.host)
 
+    # [DSC015 - Mensaje 7] Controlador_Traspasos_Inventario --> Interfaz_Gestion_Inventario: confirmacionRegistro(traspaso_id=101)
+    # [DSC015 - Mensaje 8] Interfaz_Gestion_Inventario --> Encargado Sucursal Origen: notificar("Solicitud de traspaso registrada exitosamente")
     return _build_transfer_response(db, trf)
 
 
@@ -570,6 +608,9 @@ def get_stock_transfer(
     return _build_transfer_response(db, trf)
 
 
+# ---------------------------------------------------------------------------------------------------------
+# FASES 2 Y 3: Despacho en Origen y Recepción en Destino (Mensajes 9 al 28)
+# ---------------------------------------------------------------------------------------------------------
 @router.put("/transfers/{transfer_id}/status", response_model=StockTransferResponse)
 def update_transfer_status(
     transfer_id: int,
@@ -579,8 +620,7 @@ def update_transfer_status(
     current_user: User = Depends(staff_check),
     scope: BranchScope = Depends(get_branch_scope),
 ):
-    """[CU15] Actualiza el estado de la transferencia afectando existencias y el libro mayor (ACID)."""
-    # [CU15 - Paso 7] / [DSC015 - Paso 7] +1. update_transfer_status(transfer_id, new_status)
+    """[CU15 / DSC015 - Fases 2 y 3] Actualiza el estado de la transferencia afectando existencias y el libro mayor (ACID)."""
     trf = db.query(StockTransfer).filter(StockTransfer.id == transfer_id).first()
     if not trf:
         raise HTTPException(status_code=404, detail="Transferencia no encontrada.")
@@ -595,13 +635,16 @@ def update_transfer_status(
     if current_status in ["COMPLETADA", "CANCELADA"]:
         raise HTTPException(status_code=400, detail=f"No se puede cambiar el estado de una transferencia ya {current_status}.")
 
-    # [CU15 - Paso 8] / [DSC015 - Paso 8] [alt: new_status == 'EN_TRANSITO' (Fase 2: Despacho de Mercadería)]
-    # 1. Transición a EN_TRANSITO (Descuento de stock en origen)
+    # =====================================================================================================
+    # FASE 2: Despacho Físico y Salida de Almacén Origen (Transacción en Origen) [Mensajes 9 al 18]
+    # =====================================================================================================
+    # [DSC015 - Mensaje 9] Encargado Sucursal Origen -> Interfaz_Gestion_Inventario: despacharPrendasFisicas(traspaso_id=101)
+    # [DSC015 - Mensaje 10] Interfaz_Gestion_Inventario -> Controlador_Traspasos_Inventario: procesarSalidaMercaderia(traspaso_id=101)
     if new_status == "EN_TRANSITO":
         if current_status != "SOLICITADA":
             raise HTTPException(status_code=400, detail="Solo se puede pasar a EN_TRANSITO desde SOLICITADA.")
 
-        # [CU15 - loop: Por cada prenda a despachar] Verificar stock suficiente en origen para todos los items
+        # Verificar stock suficiente en origen para todos los items
         for d in trf.details:
             inv = db.query(Inventory).filter(
                 Inventory.branch_id == trf.origin_branch_id,
@@ -614,13 +657,15 @@ def update_transfer_status(
                     detail=f"Stock insuficiente en origen para variante {d.variant_id} (Disponible: {current_stk}, Requerido: {d.quantity})."
                 )
 
-        # [CU15 - loop: Por cada prenda] Descontar y escribir en ledger
+        # [DSC015 - Mensaje 11] Controlador_Traspasos_Inventario -> Entidad_Inventario_Sucursal: restarStockOrigen(sucursal_origen, prendas, cantidades)
         for d in trf.details:
             inv = db.query(Inventory).filter(
                 Inventory.branch_id == trf.origin_branch_id,
                 Inventory.variant_id == d.variant_id
             ).first()
             inv.stock_actual -= d.quantity
+
+            # [DSC015 - Mensaje 13] Controlador_Traspasos_Inventario -> Entidad_Kardex_Movimientos: asentarMovimientoSalidaKardex(sucursal_origen, tipo="TRASPASO_SALIDA", ref="TRF-101")
             ledger = InventoryLedger(
                 branch_id=trf.origin_branch_id,
                 variant_id=d.variant_id,
@@ -631,12 +676,22 @@ def update_transfer_status(
             )
             db.add(ledger)
 
-        trf.status = "EN_TRANSITO"
+        # [DSC015 - Mensaje 12] Entidad_Inventario_Sucursal --> Controlador_Traspasos_Inventario: stock_origen_descontado
+        # [DSC015 - Mensaje 14] Entidad_Kardex_Movimientos --> Controlador_Traspasos_Inventario: asiento_salida_registrado
 
-    # [CU15 - Paso 9] / [DSC015 - Paso 9] [alt: new_status == 'COMPLETADA' (Fase 3: Recepción en Destino)]
-    # 2. Transición a COMPLETADA (Recepción en destino)
+        # [DSC015 - Mensaje 15] Controlador_Traspasos_Inventario -> Entidad_Traspaso_Mercaderia: actualizarEstadoTraspaso(traspaso_id=101, nuevo_estado="EN_TRANSITO")
+        trf.status = "EN_TRANSITO"
+        # [DSC015 - Mensaje 16] Entidad_Traspaso_Mercaderia --> Controlador_Traspasos_Inventario: estado_actualizado
+        # [DSC015 - Mensaje 17] Controlador_Traspasos_Inventario --> Interfaz_Gestion_Inventario: confirmacionDespacho()
+        # [DSC015 - Mensaje 18] Interfaz_Gestion_Inventario --> Encargado Sucursal Origen: notificar("Mercadería en camino a sucursal destino")
+
+    # =====================================================================================================
+    # FASE 3: Recepción Física e Ingreso en Almacén Destino (Transacción en Destino) [Mensajes 19 al 28]
+    # =====================================================================================================
+    # [DSC015 - Mensaje 19] Encargado Sucursal Destino -> Interfaz_Gestion_Inventario: confirmarRecepcionFisica(traspaso_id=101)
+    # [DSC015 - Mensaje 20] Interfaz_Gestion_Inventario -> Controlador_Traspasos_Inventario: procesarIngresoMercaderia(traspaso_id=101)
     elif new_status == "COMPLETADA":
-        # [CU15 - opt: Salto directo] Si venía de SOLICITADA directo a COMPLETADA, descontar primero de origen
+        # Salto directo: Si venía de SOLICITADA directo a COMPLETADA, descontar primero de origen
         if current_status == "SOLICITADA":
             for d in trf.details:
                 inv = db.query(Inventory).filter(
@@ -659,7 +714,7 @@ def update_transfer_status(
                     reference_id=trf.transfer_number,
                 ))
 
-        # Incrementar en destino
+        # [DSC015 - Mensaje 21] Controlador_Traspasos_Inventario -> Entidad_Inventario_Sucursal: sumarStockDestino(sucursal_destino, prendas, cantidades)
         for d in trf.details:
             dest_inv = db.query(Inventory).filter(
                 Inventory.branch_id == trf.destination_branch_id,
@@ -688,6 +743,7 @@ def update_transfer_status(
                     dest_inv.avg_cost = round(((prev_stock * prev_cost) + (d.quantity * unit_cost)) / new_stock, 2)
                 dest_inv.stock_actual = new_stock
 
+            # [DSC015 - Mensaje 23] Controlador_Traspasos_Inventario -> Entidad_Kardex_Movimientos: asentarMovimientoIngresoKardex(sucursal_destino, tipo="TRASPASO_INGRESO", ref="TRF-101")
             db.add(InventoryLedger(
                 branch_id=trf.destination_branch_id,
                 variant_id=d.variant_id,
@@ -697,11 +753,20 @@ def update_transfer_status(
                 reference_id=trf.transfer_number,
             ))
 
+        # [DSC015 - Mensaje 22] Entidad_Inventario_Sucursal --> Controlador_Traspasos_Inventario: stock_destino_incrementado
+        # [DSC015 - Mensaje 24] Entidad_Kardex_Movimientos --> Controlador_Traspasos_Inventario: asiento_ingreso_registrado
+
+        # [DSC015 - Mensaje 25] Controlador_Traspasos_Inventario -> Entidad_Traspaso_Mercaderia: actualizarEstadoTraspaso(traspaso_id=101, nuevo_estado="COMPLETADA")
         trf.status = "COMPLETADA"
         trf.completed_at = func.now()
         trf.received_by_id = current_user.id
+        # [DSC015 - Mensaje 26] Entidad_Traspaso_Mercaderia --> Controlador_Traspasos_Inventario: traspaso_finalizado
+        # [DSC015 - Mensaje 27] Controlador_Traspasos_Inventario --> Interfaz_Gestion_Inventario: confirmacionRecepcion()
+        # [DSC015 - Mensaje 28] Interfaz_Gestion_Inventario --> Encargado Sucursal Destino: notificar("Prendas incorporadas al inventario de la sucursal")
 
-    # 3. Transición a CANCELADA
+    # -----------------------------------------------------------------------------------------------------
+    # Transición alternativa: CANCELADA (Reversión si estaba en tránsito)
+    # -----------------------------------------------------------------------------------------------------
     elif new_status == "CANCELADA":
         # Si ya estaba en tránsito, revertir el descuento en origen
         if current_status == "EN_TRANSITO":
